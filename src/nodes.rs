@@ -1,31 +1,45 @@
+use bevy::{animation::Clip, asset::Handle, utils::Uuid};
+
 use crate::{State, Value};
 
 #[derive(Debug)]
 pub struct NodeResponse {
-    // TODO: pub clip: Handle<Clip>,
+    pub clip: Handle<Clip>,
     pub weight: f32,
-    pub time_scale: f32,
+    pub time: f32,
 }
 
 pub trait Node {
-    fn evaluate(&self, state: &mut State, response: &mut Vec<NodeResponse>) -> f32;
+    //fn visit
+
+    fn uuid(&self) -> Uuid;
+
+    fn evaluate(&self, delta_time: f32, state: &mut State, response: &mut Vec<NodeResponse>)
+        -> f32;
 }
 
 pub struct FloatSwitch {
-    pub name: String,
-    a: Box<dyn Node>,
-    b: Box<dyn Node>,
+    uuid: Uuid,
+    pub parameter: String,
+    pub time_scale: f32,
+    pub a: Box<dyn Node>,
+    pub b: Box<dyn Node>,
 }
 
 impl Node for FloatSwitch {
+    fn uuid(&self) -> Uuid {
+        self.uuid
+    }
+
     fn evaluate(&self, state: &mut State, response: &mut Vec<NodeResponse>) -> f32 {
-        let value = state.entry(&self.name, Value::Float(0.0)).as_float();
-        float_evaluate(value, &*self.a, &*self.b, state, response)
+        let value = state.entry(&self.parameter, Value::Float(0.0)).as_float();
+        float_evaluate(&self.uuid, value, &*self.a, &*self.b, state, response)
     }
 }
 
 #[inline]
 pub(crate) fn float_evaluate(
+    uuid: &Uuid,
     value: f32,
     a: &dyn Node,
     b: &dyn Node,
@@ -59,12 +73,17 @@ pub(crate) fn float_evaluate(
 }
 
 pub struct BoolSwitch {
+    uuid: Uuid,
     pub name: String,
-    on: Box<dyn Node>,
-    off: Box<dyn Node>,
+    pub on: Box<dyn Node>,
+    pub off: Box<dyn Node>,
 }
 
 impl Node for BoolSwitch {
+    fn uuid(&self) -> Uuid {
+        self.uuid
+    }
+
     fn evaluate(&self, state: &mut State, response: &mut Vec<NodeResponse>) -> f32 {
         let value = state.entry(&self.name, Value::Bool(false)).as_bool();
         if value {
@@ -76,11 +95,16 @@ impl Node for BoolSwitch {
 }
 
 pub struct Linear1DSwitch {
-    pub name: String,
+    uuid: Uuid,
     nodes: Vec<(Box<dyn Node>, f32)>,
+    pub name: String,
 }
 
 impl Node for Linear1DSwitch {
+    fn uuid(&self) -> Uuid {
+        self.uuid
+    }
+
     fn evaluate(&self, state: &mut State, response: &mut Vec<NodeResponse>) -> f32 {
         let value = state.entry(&self.name, Value::Float(0.0)).as_float();
 
@@ -106,30 +130,69 @@ impl Node for Linear1DSwitch {
 
 // #[derive(Debug, Clone)]
 // pub struct Linear2DSwitch {
-//     pub x: Linear1DSwitch,
-//     pub y: Linear1DSwitch,
 // }
 
-// impl Node for Linear2DSwitch {
-//     fn evaluate(&self, response: &mut Vec<NodeResponse>) {
-//         todo!()
-//     }
-// }
-
+#[derive(Debug)]
 pub struct Animation {
-    time: f32,
-    // TODO: clip: Handle<Clip>,
+    uuid: Uuid,
+    duration: f32,
+    /// Time parameter
+    pub parameter: Option<String>,
+    pub time_scale: f32,
+    pub warp: bool,
+    pub clip: Handle<Clip>,
 }
 
 impl Node for Animation {
-    fn evaluate(&self, _: &mut State, response: &mut Vec<NodeResponse>) -> f32 {
-        response.push(NodeResponse {
-            // TODO: clip: self.clip,
-            weight: 1.0,
-            time_scale: 1.0,
-        });
+    fn uuid(&self) -> Uuid {
+        self.uuid
+    }
 
-        self.time
+    fn evaluate(
+        &self,
+        delta_time: f32,
+        state: &mut State,
+        response: &mut Vec<NodeResponse>,
+    ) -> f32 {
+        if let Some(parameter) = &self.parameter {
+            // Time fixed
+            let time = state
+                .entry(parameter, Value::Float(0.0))
+                .as_float()
+                .clamp(0.0, 1.0);
+
+            response.push(NodeResponse {
+                clip: self.clip.clone(),
+                weight: 1.0,
+                time,
+            });
+
+            self.duration
+        } else {
+            // Time run
+            let duration = self.duration * self.time_scale;
+            let n = state.time(self.uuid);
+            let mut time = (*n) * duration + delta_time;
+            if time > self.duration {
+                if self.warp {
+                    *n = 0.0;
+                    time = 0.0;
+                } else {
+                    *n = 1.0;
+                    time = duration;
+                }
+            } else {
+                *n = time / duration;
+            }
+
+            response.push(NodeResponse {
+                clip: self.clip.clone(),
+                weight: 1.0,
+                time,
+            });
+
+            duration
+        }
     }
 }
 
@@ -140,9 +203,15 @@ mod tests {
     #[test]
     fn float_switch() {
         let idle_run = FloatSwitch {
-            name: "Speed".to_string(),
-            a: Box::new(Animation { time: 6.0 }),
-            b: Box::new(Animation { time: 1.0 }),
+            parameter: "Speed".to_string(),
+            a: Box::new(Animation {
+                time: 6.0,
+                ..Default::default()
+            }),
+            b: Box::new(Animation {
+                time: 1.0,
+                ..Default::default()
+            }),
         };
         let mut state = State::default();
         let mut response = vec![];

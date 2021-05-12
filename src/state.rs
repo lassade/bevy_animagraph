@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use bevy::utils::{HashMap, Uuid};
 
 #[derive(Debug, Copy, Clone)]
 pub enum Value {
@@ -26,17 +26,21 @@ impl Value {
 
 #[derive(Default, Debug)]
 pub struct State {
-    inner: HashMap<String, Value>,
+    variables: HashMap<String, Value>,
+    time: HashMap<Uuid, f32>,
 }
 
 impl State {
     #[inline]
     pub fn get(&self, name: &str) -> Value {
-        self.inner.get(name).copied().unwrap_or(Value::Bool(false))
+        self.variables
+            .get(name)
+            .copied()
+            .unwrap_or(Value::Bool(false))
     }
 
     pub fn set(&mut self, name: &str, value: Value) {
-        match (self.inner.get_mut(name), value) {
+        match (self.variables.get_mut(name), value) {
             (Some(Value::Float(y)), Value::Float(x)) => *y = x,
             (Some(Value::Bool(y)), Value::Bool(x)) => *y = x,
             _ => {}
@@ -47,16 +51,22 @@ impl State {
     where
         K: Into<String> + AsRef<str>,
     {
-        if let Some(value) = self.inner.get(name.as_ref()) {
+        if let Some(value) = self.variables.get(name.as_ref()) {
             *value
         } else {
-            self.inner.insert(name.into(), default);
+            self.variables.insert(name.into(), default);
             default
         }
     }
 
     #[inline]
+    pub fn time(&mut self, uuid: Uuid) -> &mut f32 {
+        self.time.entry(uuid).or_insert(0.0)
+    }
+
+    #[inline]
     pub fn clear(&mut self) {
-        self.inner.clear();
+        self.variables.clear();
+        self.time.clear();
     }
 }
