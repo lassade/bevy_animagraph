@@ -9,7 +9,6 @@ edition = "2018"
 [dependencies]
 bevy = { git = "https://github.com/lassade/bevy.git", branch = "animations" }
 petgraph = "0.5.1"
-#indexmap = "1.6.2"
 
 [dev-dependencies]
 bevy_egui = { git = "https://github.com/jakobhellermann/bevy_egui", branch = "bevy-main" }

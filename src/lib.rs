@@ -109,8 +109,22 @@ impl Param {
 #[derive(Debug, TypeUuid)]
 #[uuid = "6b7c940d-a698-40ae-9ff2-b08747d6e8e1"]
 pub struct AnimatorGraph {
-    parameters: HashMap<String, Param>,
-    layers: Vec<Layer>,
+    pub name: String,
+    pub parameters: HashMap<String, Param>,
+    pub layers: Vec<Layer>,
+}
+
+impl Default for AnimatorGraph {
+    fn default() -> Self {
+        AnimatorGraph {
+            name: String::default(),
+            parameters: HashMap::default(),
+            layers: vec![Layer {
+                name: "Layer0".to_string(),
+                ..Default::default()
+            }],
+        }
+    }
 }
 
 #[derive(Debug)]
