@@ -141,13 +141,13 @@ pub enum StateData {
     // },
     Blend1D {
         value: Var<f32>,
-        entries: Vec<Entry<f32>>,
+        blend: Blend1D,
     },
     Blend2D {
         mode: Distance,
         x: Var<f32>,
         y: Var<f32>,
-        entries: Vec<Entry<Vec2>>,
+        blend: Blend2D,
     },
 }
 
@@ -162,6 +162,16 @@ pub struct Entry<T> {
     pub clip: Handle<Clip>,
     pub position: T,
     pub time_scale: Var<f32>,
+}
+
+#[derive(Default, Debug)]
+pub struct Blend1D {
+    entries: Vec<Entry<f32>>,
+}
+
+#[derive(Default, Debug)]
+pub struct Blend2D {
+    entries: Vec<Entry<Vec2>>,
 }
 
 #[derive(Debug)]
@@ -479,7 +489,10 @@ fn update_state(
                 animator.layers.push(layer);
             }
         }
-        StateData::Blend1D { value, entries } => {
+        StateData::Blend1D {
+            value,
+            blend: entries,
+        } => {
             let _ = value;
             let _ = entries;
             todo!()
@@ -488,7 +501,7 @@ fn update_state(
             mode,
             x,
             y,
-            entries,
+            blend: entries,
         } => {
             let _ = mode;
             let _ = x;
