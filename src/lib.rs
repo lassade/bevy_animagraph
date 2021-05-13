@@ -118,14 +118,40 @@ pub struct Layer {
     pub name: String,
     pub weight: Var<f32>,
     pub additive: bool,
-    graph: Graph<State, Transition>,
+    pub graph: Graph<State, Transition>,
+}
+
+impl Default for Layer {
+    fn default() -> Self {
+        Layer {
+            name: String::default(),
+            weight: Var::Value(1.0),
+            additive: false,
+            graph: Graph::new(),
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct State {
     pub name: String,
-    pub data: StateData,
+    /// State position, used for rendering the graph
+    pub position: Vec2,
+    /// Normalized state start time
     pub offset: Var<f32>,
+    /// State data
+    pub data: StateData,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        State {
+            name: String::default(),
+            position: Vec2::ZERO,
+            offset: Var::Value(0.0),
+            data: StateData::Marker,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -438,7 +464,12 @@ fn update_transition(
                 to: StateInfo {
                     state: state_index as u32,
                     duration: 0.0,
-                    normalized_time: state_node.weight.offset.get(parameters).unwrap_or(0.0),
+                    normalized_time: state_node
+                        .weight
+                        .offset
+                        .get(parameters)
+                        .unwrap_or(0.0)
+                        .fract(),
                 },
                 normalized_time: 0.0,
             });
