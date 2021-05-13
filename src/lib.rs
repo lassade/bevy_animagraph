@@ -1,15 +1,18 @@
 use std::f32::EPSILON;
 
 use bevy::{
-    animation::{Animator, Clip},
-    app::EventReader,
-    asset::{AssetEvent, Assets, Handle},
+    animation::{AnimationStage, AnimationSystem, Animator, Clip},
+    app::{EventReader, Plugin},
+    asset::{AddAsset, AssetEvent, Assets, Handle},
     core::Time,
-    ecs::system::{Query, Res},
+    ecs::{
+        reflect::ReflectComponent,
+        schedule::ParallelSystemDescriptorCoercion,
+        system::{IntoSystem, Query, Res},
+    },
     math::Vec2,
-    reflect::TypeUuid,
-    utils::HashMap,
-    utils::HashSet,
+    reflect::{Reflect, TypeUuid},
+    utils::{HashMap, HashSet},
 };
 use petgraph::{visit::EdgeRef, EdgeDirection::Outgoing, Graph};
 
@@ -211,11 +214,23 @@ pub struct GraphInfo {
     parameters: HashMap<String, Param>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Reflect)]
+#[reflect(Component)]
 pub struct AnimatorController {
     graph: Handle<AnimatorGraph>,
+    #[reflect(ignore)]
     runtime: Option<GraphInfo>,
     pub time_scale: f32,
+}
+
+impl Default for AnimatorController {
+    fn default() -> Self {
+        AnimatorController {
+            graph: Handle::default(),
+            runtime: None,
+            time_scale: 1.0,
+        }
+    }
 }
 
 impl AnimatorController {
@@ -481,5 +496,20 @@ fn update_state(
             let _ = entries;
             todo!()
         }
+    }
+}
+
+pub struct AnimatorControllerPlugin;
+
+impl Plugin for AnimatorControllerPlugin {
+    fn build(&self, app: &mut bevy::prelude::AppBuilder) {
+        app.add_asset::<AnimatorGraph>()
+            .register_type::<AnimatorController>()
+            .add_system_to_stage(
+                AnimationStage::Animate,
+                animator_controller_system
+                    .system()
+                    .before(AnimationSystem::Animate),
+            );
     }
 }
