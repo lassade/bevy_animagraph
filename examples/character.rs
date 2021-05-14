@@ -63,8 +63,8 @@ fn animator_graph_editor_system(
             let (id, rect) = ui.allocate_space(ui.available_size());
 
             if let Some(graph_handle) = editing {
-                if let Some(mut graph) = Modify::new(&mut *animator_graphs, &*graph_handle) {
-                    let layer_count = graph.view().layers.len();
+                if let Some(mut target) = Modify::new(&mut *animator_graphs, &*graph_handle) {
+                    let layer_count = target.view().layers.len();
                     if *selected_layer > layer_count {
                         *selected_layer = 0;
                     }
@@ -73,7 +73,7 @@ fn animator_graph_editor_system(
                         // Create the default layer
                         if action_needed(ui, rect, "Graph have no layers", "Create Layer").clicked()
                         {
-                            graph.mutate().layers.push(Layer {
+                            target.mutate().layers.push(Layer {
                                 name: "Layer0".to_string(),
                                 ..Default::default()
                             });
@@ -87,34 +87,35 @@ fn animator_graph_editor_system(
                                 // Graph name
                                 ui.add(
                                     egui::TextEdit::singleline(
-                                        &mut graph.mutate_without_modify().name,
+                                        &mut target.mutate_without_modify().name,
                                     )
                                     .desired_width(100.0)
                                     .hint_text("Name"),
                                 );
                                 // Select active layer
                                 egui::ComboBox::from_id_source("layer_select")
-                                    .selected_text(&graph.view().layers[*selected_layer].name)
+                                    .selected_text(&target.view().layers[*selected_layer].name)
                                     .show_ui(ui, |ui| {
                                         for i in 0..layer_count {
-                                            let text = &graph.view().layers[i].name;
+                                            let text = &target.view().layers[i].name;
                                             ui.selectable_value(selected_layer, i, text);
                                         }
                                     });
                             });
                         });
 
+                        let state_menu_id = id.with("state_menu");
+                        let layer_menu_id = id.with("layer_menu");
+
                         draw_grid(ui, rect, *position, vec2(40.0, 40.0));
 
                         // Draw nodes
-                        let state_menu_id = id.with("state_menu");
-                        for (index, node) in graph.view().layers[*selected_layer]
-                            .graph
-                            .raw_nodes()
-                            .iter()
-                            .enumerate()
-                        {
-                            let state = &node.weight;
+                        let modify = false;
+                        let graph =
+                            &mut target.mutate_without_modify().layers[*selected_layer].graph;
+                        for index in 0..graph.node_count() {
+                            let index = index as u32;
+                            let state = graph.node_weight_mut(index.into()).unwrap();
                             let selection_index = Some(Selected::State(index as u32));
 
                             let center: [f32; 2] = state.position.into();
@@ -136,8 +137,13 @@ fn animator_graph_editor_system(
 
                             if response.clicked() || response.secondary_clicked() {
                                 *selected = selection_index;
+                            } else if response.dragged_by(egui::PointerButton::Primary) {
+                                // Drag node
+                                let delta: [f32; 2] = response.drag_delta().into();
+                                state.position += delta.into();
                             }
 
+                            // Open state menu
                             if let Some(cursor_position) = response.hover_pos() {
                                 if response.secondary_clicked()
                                     && !ui.memory().is_popup_open(state_menu_id)
@@ -147,8 +153,11 @@ fn animator_graph_editor_system(
                                 }
                             }
                         }
+                        std::mem::drop(graph);
+                        if modify {
+                            target.mutate();
+                        }
 
-                        let layer_menu_id = id.with("layer_menu");
                         let mut response = ui.interact(rect, id, egui::Sense::click_and_drag());
                         if response.dragged_by(egui::PointerButton::Middle) {
                             // Pan
@@ -172,7 +181,7 @@ fn animator_graph_editor_system(
                                 let position = *context_menu_position - *position - rect.min;
                                 let position: [f32; 2] = position.into();
 
-                                graph.mutate().layers[*selected_layer]
+                                target.mutate().layers[*selected_layer]
                                     .graph
                                     .add_node(State {
                                         name: "Empty".to_string(),
@@ -194,7 +203,7 @@ fn animator_graph_editor_system(
                         if delete_selected || ui.input().key_pressed(Key::Delete) {
                             match selected {
                                 Some(Selected::State(index)) => {
-                                    graph.mutate().layers[*selected_layer]
+                                    target.mutate().layers[*selected_layer]
                                         .graph
                                         .remove_node((*index).into());
                                 }
