@@ -1,9 +1,14 @@
 use std::f32::EPSILON;
 
 use bevy::prelude::*;
-use bevy_animation_controller::{AnimatorControllerPlugin, AnimatorGraph, Layer};
+use bevy_animation_controller::{
+    AnimatorControllerPlugin, AnimatorGraph, Layer, State, Transition,
+};
 use bevy_egui::{
-    egui::{self, pos2, vec2, Color32, Label, Pos2, Rect, Response, Stroke, Ui, Vec2},
+    egui::{
+        self, emath::NumExt, pos2, vec2, Align, Button, Color32, Key, Label, Layout, Pos2, Rect,
+        Response, Sense, Stroke, TextStyle, Ui, Vec2, WidgetInfo, WidgetType,
+    },
     EguiContext, EguiPlugin,
 };
 
@@ -18,15 +23,16 @@ fn main() {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+#[derive(Debug, PartialEq, Eq)]
 enum Selected {
     State(u32),
-    Transition(u32),
+    Transition(u32, u32),
 }
 
 struct AnimatorGraphEditor {
     open: bool,
     editing: Option<Handle<AnimatorGraph>>,
-    position: Pos2,
+    position: Vec2,
     selected: Option<Selected>,
     selected_layer: usize,
     context_menu_position: Pos2,
@@ -98,22 +104,62 @@ fn animator_graph_editor_system(
                             });
                         });
 
-                        grid(ui, rect, *position, vec2(40.0, 40.0));
-                        // TODO: Draw nodes
+                        draw_grid(ui, rect, *position, vec2(40.0, 40.0));
 
+                        // Draw nodes
+                        let state_menu_id = id.with("state_menu");
+                        for (index, node) in graph.layers[*selected_layer]
+                            .graph
+                            .raw_nodes()
+                            .iter()
+                            .enumerate()
+                        {
+                            let state = &node.weight;
+                            let selection_index = Some(Selected::State(index as u32));
+
+                            let center: [f32; 2] = state.position.into();
+                            let center = rect.min + (Vec2::from(center) + *position);
+                            let rect = Rect::from_center_size(center, vec2(180.0, 40.0));
+                            let fill = if index == 0 {
+                                Color32::from_rgb(200, 70, 0)
+                            } else {
+                                Color32::from_gray(60)
+                            };
+
+                            let response = state_widget(
+                                ui,
+                                rect,
+                                &state.name,
+                                fill,
+                                selection_index == *selected,
+                            );
+
+                            if response.clicked() || response.secondary_clicked() {
+                                *selected = selection_index;
+                            }
+
+                            if let Some(cursor_position) = response.hover_pos() {
+                                if response.secondary_clicked()
+                                    && !ui.memory().is_popup_open(state_menu_id)
+                                {
+                                    *context_menu_position = cursor_position;
+                                    ui.memory().open_popup(state_menu_id);
+                                }
+                            }
+                        }
+
+                        let layer_menu_id = id.with("layer_menu");
                         let mut response = ui.interact(rect, id, egui::Sense::click_and_drag());
-                        let context_menu_id = id.with("context_menu");
-
                         if response.dragged_by(egui::PointerButton::Middle) {
                             // Pan
                             *position += response.drag_delta();
                         } else {
                             if let Some(cursor_position) = response.hover_pos() {
                                 if response.secondary_clicked()
-                                    && !ui.memory().is_popup_open(context_menu_id)
+                                    && !ui.memory().is_popup_open(layer_menu_id)
                                 {
                                     *context_menu_position = cursor_position;
-                                    ui.memory().open_popup(context_menu_id);
+                                    ui.memory().open_popup(layer_menu_id);
                                 }
                             }
                         }
@@ -121,12 +167,41 @@ fn animator_graph_editor_system(
                         response.rect =
                             egui::Rect::from_min_size(*context_menu_position, (150.0, 1.0).into());
 
-                        egui::popup::popup_below_widget(ui, context_menu_id, &response, |ui| {
-                            //ui.set_enabled(selected);
+                        egui::popup::popup_below_widget(ui, layer_menu_id, &response, |ui| {
                             if ui.selectable_label(false, "Create State").clicked() {
-                                //curve.set_interpolation(index, Interpolation::Step);
+                                let position = *context_menu_position - *position - rect.min;
+                                let position: [f32; 2] = position.into();
+
+                                let graph = animator_graphs.get_mut(&*graph_handle).unwrap();
+                                graph.layers[*selected_layer].graph.add_node(State {
+                                    name: "Empty".to_string(),
+                                    position: position.into(),
+                                    ..Default::default()
+                                });
                             }
                         });
+
+                        let mut delete_selected = false;
+                        egui::popup::popup_below_widget(ui, state_menu_id, &response, |ui| {
+                            //ui.set_enabled(true);
+                            if ui.selectable_label(false, "Create Transition").clicked() {}
+                            if ui.selectable_label(false, "Delete").clicked() {
+                                delete_selected = true;
+                            }
+                        });
+
+                        if delete_selected || ui.input().key_pressed(Key::Delete) {
+                            let graph = animator_graphs.get_mut(&*graph_handle).unwrap();
+                            match selected {
+                                Some(Selected::State(index)) => {
+                                    graph.layers[*selected_layer]
+                                        .graph
+                                        .remove_node((*index).into());
+                                }
+                                _ => {}
+                            }
+                            *selected = None;
+                        }
                     }
                 } else {
                     *editing = None;
@@ -150,7 +225,48 @@ fn animator_graph_editor_system(
         });
 }
 
-fn grid(ui: &Ui, rect: Rect, offset: Pos2, size: Vec2) {
+fn state_widget(
+    ui: &mut Ui,
+    rect: Rect,
+    name: impl Into<String>,
+    fill: Color32,
+    selected: bool,
+) -> Response {
+    let mut ui = ui.child_ui(rect, *ui.layout());
+
+    let button_padding = ui.spacing().button_padding;
+    let galley = ui.fonts().layout_no_wrap(TextStyle::Button, name.into());
+
+    let (rect, response) = ui.allocate_at_least(rect.size(), Sense::click_and_drag());
+    response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, &galley.text));
+
+    if ui.clip_rect().intersects(rect) {
+        let visuals = if !selected {
+            ui.style().interact(&response)
+        } else {
+            &ui.style().visuals.widgets.active
+        };
+
+        let text_cursor = ui
+            .layout()
+            .align_size_within_rect(galley.size, rect.shrink2(button_padding))
+            .min;
+
+        ui.painter().rect(
+            rect.expand(visuals.expansion),
+            visuals.corner_radius,
+            fill,
+            visuals.bg_stroke,
+        );
+
+        let text_color = visuals.text_color();
+        ui.painter().galley(text_cursor, galley, text_color);
+    }
+
+    response
+}
+
+fn draw_grid(ui: &Ui, rect: Rect, offset: Vec2, size: Vec2) {
     let Rect { min, mut max } = rect;
     max -= vec2(EPSILON, EPSILON);
 
@@ -198,7 +314,7 @@ impl Plugin for AnimatorControllerEditorPlugin {
         app.insert_resource(AnimatorGraphEditor {
             open: true,
             editing: None,
-            position: Pos2::ZERO,
+            position: Vec2::ZERO,
             selected: None,
             selected_layer: 0,
             context_menu_position: Pos2::ZERO,
