@@ -1,6 +1,9 @@
 use std::f32::EPSILON;
 
-use bevy::prelude::*;
+use bevy::{
+    asset::{Asset, HandleId},
+    prelude::*,
+};
 use bevy_animation_controller::{
     AnimatorControllerPlugin, AnimatorGraph, Layer, State, Transition,
 };
@@ -60,8 +63,8 @@ fn animator_graph_editor_system(
             let (id, rect) = ui.allocate_space(ui.available_size());
 
             if let Some(graph_handle) = editing {
-                if let Some(graph) = animator_graphs.get(&*graph_handle) {
-                    let layer_count = graph.layers.len();
+                if let Some(mut graph) = Modify::new(&mut *animator_graphs, &*graph_handle) {
+                    let layer_count = graph.view().layers.len();
                     if *selected_layer > layer_count {
                         *selected_layer = 0;
                     }
@@ -70,8 +73,7 @@ fn animator_graph_editor_system(
                         // Create the default layer
                         if action_needed(ui, rect, "Graph have no layers", "Create Layer").clicked()
                         {
-                            let graph = animator_graphs.get_mut(&*graph_handle).unwrap();
-                            graph.layers.push(Layer {
+                            graph.mutate().layers.push(Layer {
                                 name: "Layer0".to_string(),
                                 ..Default::default()
                             });
@@ -84,20 +86,18 @@ fn animator_graph_editor_system(
                             ui.horizontal(|ui| {
                                 // Graph name
                                 ui.add(
-                                    // SAFETY: We currently mutable ownership over the graph assets,
-                                    // this is just to avoids unneeded asset modified events
-                                    egui::TextEdit::singleline(unsafe {
-                                        &mut *(&graph.name as *const _ as *mut _)
-                                    })
+                                    egui::TextEdit::singleline(
+                                        &mut graph.mutate_without_modify().name,
+                                    )
                                     .desired_width(100.0)
                                     .hint_text("Name"),
                                 );
                                 // Select active layer
                                 egui::ComboBox::from_id_source("layer_select")
-                                    .selected_text(&graph.layers[*selected_layer].name)
+                                    .selected_text(&graph.view().layers[*selected_layer].name)
                                     .show_ui(ui, |ui| {
                                         for i in 0..layer_count {
-                                            let text = &graph.layers[i].name;
+                                            let text = &graph.view().layers[i].name;
                                             ui.selectable_value(selected_layer, i, text);
                                         }
                                     });
@@ -108,7 +108,7 @@ fn animator_graph_editor_system(
 
                         // Draw nodes
                         let state_menu_id = id.with("state_menu");
-                        for (index, node) in graph.layers[*selected_layer]
+                        for (index, node) in graph.view().layers[*selected_layer]
                             .graph
                             .raw_nodes()
                             .iter()
@@ -172,12 +172,13 @@ fn animator_graph_editor_system(
                                 let position = *context_menu_position - *position - rect.min;
                                 let position: [f32; 2] = position.into();
 
-                                let graph = animator_graphs.get_mut(&*graph_handle).unwrap();
-                                graph.layers[*selected_layer].graph.add_node(State {
-                                    name: "Empty".to_string(),
-                                    position: position.into(),
-                                    ..Default::default()
-                                });
+                                graph.mutate().layers[*selected_layer]
+                                    .graph
+                                    .add_node(State {
+                                        name: "Empty".to_string(),
+                                        position: position.into(),
+                                        ..Default::default()
+                                    });
                             }
                         });
 
@@ -191,10 +192,9 @@ fn animator_graph_editor_system(
                         });
 
                         if delete_selected || ui.input().key_pressed(Key::Delete) {
-                            let graph = animator_graphs.get_mut(&*graph_handle).unwrap();
                             match selected {
                                 Some(Selected::State(index)) => {
-                                    graph.layers[*selected_layer]
+                                    graph.mutate().layers[*selected_layer]
                                         .graph
                                         .remove_node((*index).into());
                                 }
@@ -306,6 +306,63 @@ fn action_needed(
     })
     .inner
 }
+
+///////////////////////////////////////////////////////////////////////////////
+
+/// Helper struct to allow mutate or view an asset without raising the [`AssetEvent::Modified`] event,
+/// asset events will be raised (or not) on drop;
+pub struct Modify<'a, T: Asset> {
+    assets: &'a mut Assets<T>,
+    target: &'a mut T,
+    handle_id: HandleId,
+    modified: bool,
+}
+
+impl<'a, T: Asset> Modify<'a, T> {
+    pub fn new(assets: &'a mut Assets<T>, handle: impl Into<HandleId>) -> Option<Self> {
+        let handle_id = handle.into();
+        if let Some(target) = assets.get(handle_id) {
+            // SAFETY: We currently mutable ownership over the assets,
+            // this is just to avoids unneeded asset modified events
+            let target = unsafe { &mut *(target as *const _ as *mut _) };
+            Some(Self {
+                assets,
+                target,
+                handle_id,
+                modified: false,
+            })
+        } else {
+            None
+        }
+    }
+
+    #[inline(always)]
+    pub fn view(&self) -> &T {
+        self.target
+    }
+
+    #[inline(always)]
+    pub fn mutate(&mut self) -> &mut T {
+        self.modified = true;
+        self.target
+    }
+
+    #[inline(always)]
+    pub fn mutate_without_modify(&mut self) -> &mut T {
+        self.target
+    }
+}
+
+impl<'a, T: Asset> std::ops::Drop for Modify<'a, T> {
+    fn drop(&mut self) {
+        if self.modified {
+            //  Trigger an asset modify event
+            self.assets.get_mut(self.handle_id);
+        }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
 
 pub struct AnimatorControllerEditorPlugin;
 
