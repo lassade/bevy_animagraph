@@ -21,7 +21,7 @@ use petgraph::{visit::EdgeRef, EdgeDirection::Outgoing, Graph};
 ///////////////////////////////////////////////////////////////////////////////
 
 /// [`AnimatorGraph`] variable, that can be a parameter a fixed value
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Var<T> {
     Value(T),
     Param(String),
@@ -148,7 +148,52 @@ impl Default for Layer {
     }
 }
 
-#[derive(Debug)]
+impl Layer {
+    pub fn set_default_state(&mut self, state: u32) -> bool {
+        if (state as usize) >= self.graph.node_count() {
+            return false;
+        }
+
+        // TODO: Theres got to be a better way of doing this
+
+        let default_state = 0.into();
+        let state = state.into();
+        let mut graph: Graph<State, Transition> =
+            Graph::from_edges(self.graph.raw_edges().iter().map(|edge| {
+                let mut source = edge.source();
+                if source == state {
+                    source = default_state;
+                } else if source == default_state {
+                    source = state;
+                }
+
+                let mut target = edge.target();
+                if target == state {
+                    target = default_state;
+                } else if target == default_state {
+                    target = state;
+                }
+
+                (source, target, edge.weight.clone())
+            }));
+
+        for (i, w) in graph.node_weights_mut().enumerate() {
+            let mut i = (i as u32).into();
+            if state == i {
+                i = default_state;
+            } else if default_state == i {
+                i = state;
+            }
+            std::mem::swap(w, self.graph.node_weight_mut(i).unwrap());
+        }
+
+        self.graph = graph;
+
+        true
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct State {
     pub name: String,
     /// State position, used for rendering the graph
@@ -170,7 +215,7 @@ impl Default for State {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum StateData {
     /// Used for `Entry`, `Exit` or `Any`
     Marker,
@@ -193,30 +238,30 @@ pub enum StateData {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum Distance {
     Block,
     Cartesian,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Entry<T> {
     pub clip: Handle<Clip>,
     pub position: T,
     pub time_scale: Var<f32>,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct Blend1D {
     entries: Vec<Entry<f32>>,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct Blend2D {
     entries: Vec<Entry<Vec2>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum Compare {
     Equal,
     Less,
@@ -225,7 +270,7 @@ pub enum Compare {
     GreaterOrEqual,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Condition {
     Bool { x: String, y: Var<bool> },
     Float { x: String, op: Compare, y: Var<f32> },
@@ -233,7 +278,7 @@ pub enum Condition {
     ExitTimeNormalized { normalized_time: f32 },
 }
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Clone)]
 pub struct Transition {
     pub length: f32,
     pub conditions: Vec<Condition>,
