@@ -1,3 +1,5 @@
+pub extern crate petgraph;
+
 use std::f32::EPSILON;
 
 use bevy::{
@@ -229,7 +231,7 @@ pub enum Condition {
     Float { x: String, op: Compare, y: Var<f32> },
 }
 
-#[derive(Debug)]
+#[derive(Default, Debug)]
 pub struct Transition {
     pub length: f32,
     pub conditions: Vec<Condition>,

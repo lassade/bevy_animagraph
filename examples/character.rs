@@ -5,6 +5,7 @@ use bevy::{
     prelude::*,
 };
 use bevy_animation_controller::{
+    petgraph::{visit::EdgeRef, EdgeDirection::Outgoing},
     AnimatorControllerPlugin, AnimatorGraph, Layer, State, Transition,
 };
 use bevy_egui::{
@@ -26,15 +27,22 @@ fn main() {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 enum Selected {
     State(u32),
-    Transition(u32, u32),
+    Transition(u32),
+}
+
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+enum EditorOperation {
+    None,
+    AddingTransition { state: u32, position: Pos2 },
 }
 
 struct AnimatorGraphEditor {
     open: bool,
     editing: Option<Handle<AnimatorGraph>>,
+    operation: EditorOperation,
     position: Vec2,
     selected: Option<Selected>,
     selected_layer: usize,
@@ -49,6 +57,7 @@ fn animator_graph_editor_system(
     let AnimatorGraphEditor {
         open,
         editing,
+        operation,
         position,
         selected,
         selected_layer,
@@ -107,19 +116,63 @@ fn animator_graph_editor_system(
                         let state_menu_id = id.with("state_menu");
                         let layer_menu_id = id.with("layer_menu");
 
-                        draw_grid(ui, rect, *position, vec2(40.0, 40.0));
-
-                        // Draw nodes
-                        let modify = false;
+                        let mut modify = false;
                         let graph =
                             &mut target.mutate_without_modify().layers[*selected_layer].graph;
+
+                        draw_grid(ui, rect, *position, vec2(40.0, 40.0));
+
+                        let position_offset = rect.min.to_vec2() + *position;
+
+                        // Draw transitions
+                        for index in 0..graph.node_count() {
+                            let index = index as u32;
+
+                            let state = graph.node_weight_mut(index.into()).unwrap();
+                            let p0 = state_pos(state) + position_offset;
+
+                            for edge in graph.edges_directed(index.into(), Outgoing) {
+                                if let Some(target) = graph.node_weight(edge.target()) {
+                                    let p1 = state_pos(target) + position_offset;
+                                    let v = p0 - p1;
+                                    let n = vec2(v.y, -v.x).normalized() * 10.0;
+                                    ui.painter().line_segment(
+                                        [p0 + n, p1 + n],
+                                        Stroke {
+                                            width: 1.0,
+                                            color: Color32::WHITE,
+                                        },
+                                    );
+                                } else {
+                                    // TODO: Remove edge
+                                }
+                            }
+                        }
+
+                        // Draw adding transition helper
+                        if let EditorOperation::AddingTransition { state, position } = operation {
+                            if let Some(state) = graph.node_weight_mut((*state).into()) {
+                                let p0 = state_pos(state) + position_offset;
+                                ui.painter().line_segment(
+                                    [p0, *position],
+                                    Stroke {
+                                        width: 1.0,
+                                        color: Color32::WHITE,
+                                    },
+                                );
+                            } else {
+                                // Exit
+                                *operation = EditorOperation::None;
+                            }
+                        }
+
+                        // Draw nodes
                         for index in 0..graph.node_count() {
                             let index = index as u32;
                             let state = graph.node_weight_mut(index.into()).unwrap();
                             let selection_index = Some(Selected::State(index as u32));
 
-                            let center: [f32; 2] = state.position.into();
-                            let center = rect.min + (Vec2::from(center) + *position);
+                            let center = state_pos(state) + position_offset;
                             let rect = Rect::from_center_size(center, vec2(180.0, 40.0));
                             let fill = if index == 0 {
                                 Color32::from_rgb(200, 70, 0)
@@ -135,7 +188,21 @@ fn animator_graph_editor_system(
                                 selection_index == *selected,
                             );
 
-                            if response.clicked() || response.secondary_clicked() {
+                            if response.clicked() {
+                                match operation {
+                                    EditorOperation::AddingTransition { state, .. } => {
+                                        modify = true;
+                                        graph.add_edge(
+                                            (*state).into(),
+                                            index.into(),
+                                            Transition::default(),
+                                        );
+                                        *operation = EditorOperation::None;
+                                    }
+                                    _ => {}
+                                }
+                                *selected = selection_index;
+                            } else if response.secondary_clicked() {
                                 *selected = selection_index;
                             } else if response.dragged_by(egui::PointerButton::Primary) {
                                 // Drag node
@@ -194,11 +261,34 @@ fn animator_graph_editor_system(
                         let mut delete_selected = false;
                         egui::popup::popup_below_widget(ui, state_menu_id, &response, |ui| {
                             //ui.set_enabled(true);
-                            if ui.selectable_label(false, "Create Transition").clicked() {}
-                            if ui.selectable_label(false, "Delete").clicked() {
-                                delete_selected = true;
+                            match *selected {
+                                Some(Selected::State(state)) => {
+                                    let response = ui.selectable_label(false, "Create Transition");
+                                    if response.clicked() {
+                                        if let Some(position) = response.interact_pointer_pos() {
+                                            *operation = EditorOperation::AddingTransition {
+                                                state,
+                                                position,
+                                            };
+                                        }
+                                    }
+                                    if ui.selectable_label(false, "Delete").clicked() {
+                                        delete_selected = true;
+                                    }
+                                }
+                                _ => {}
                             }
                         });
+
+                        // Update operation
+                        match operation {
+                            EditorOperation::AddingTransition { position, .. } => {
+                                if let Some(p) = response.hover_pos() {
+                                    *position = p;
+                                }
+                            }
+                            _ => {}
+                        }
 
                         if delete_selected || ui.input().key_pressed(Key::Delete) {
                             match selected {
@@ -232,6 +322,12 @@ fn animator_graph_editor_system(
                 }
             }
         });
+}
+
+#[inline(always)]
+fn state_pos(state: &State) -> Pos2 {
+    let position: [f32; 2] = state.position.into();
+    Pos2::from(position)
 }
 
 fn state_widget(
@@ -273,6 +369,16 @@ fn state_widget(
     }
 
     response
+}
+
+fn line_widget(
+    ui: &mut Ui,
+    rect: Rect,
+    name: impl Into<String>,
+    fill: Color32,
+    selected: bool,
+) -> Response {
+    todo!()
 }
 
 fn draw_grid(ui: &Ui, rect: Rect, offset: Vec2, size: Vec2) {
@@ -380,6 +486,7 @@ impl Plugin for AnimatorControllerEditorPlugin {
         app.insert_resource(AnimatorGraphEditor {
             open: true,
             editing: None,
+            operation: EditorOperation::None,
             position: Vec2::ZERO,
             selected: None,
             selected_layer: 0,
