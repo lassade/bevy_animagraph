@@ -229,6 +229,8 @@ pub enum Compare {
 pub enum Condition {
     Bool { x: String, y: Var<bool> },
     Float { x: String, op: Compare, y: Var<f32> },
+    ExitTime { time: f32 },
+    ExitTimeNormalized { normalized_time: f32 },
 }
 
 #[derive(Default, Debug)]
@@ -468,6 +470,13 @@ fn update_transition(
                             Compare::Greater => x > y,
                             Compare::GreaterOrEqual => x > (y - EPSILON),
                         }
+                    }
+                    Condition::ExitTime { time } => {
+                        let state_info = &layer_info.current_state;
+                        *time > state_info.normalized_time * state_info.duration
+                    }
+                    Condition::ExitTimeNormalized { normalized_time } => {
+                        *normalized_time > layer_info.current_state.normalized_time
                     }
                 })
         })
