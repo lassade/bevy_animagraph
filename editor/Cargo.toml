@@ -1,0 +1,16 @@
+[package]
+name = "bevy_animagraph_editor"
+version = "0.1.0"
+authors = ["Felipe Jorge <felipe.jorge.pereira@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bevy = { git = "https://github.com/lassade/bevy", branch = "animations" }
+bevy_egui = { git = "https://github.com/jakobhellermann/bevy_egui", branch = "bevy-main" }
+bevy_animagraph = { path = "../" }
+
+[[example]]
+name = "main"
+path = "examples/main.rs"

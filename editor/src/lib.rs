@@ -4,7 +4,7 @@ use bevy::{
     asset::{Asset, HandleId},
     prelude::*,
 };
-use bevy_animation_controller::{
+use bevy_animagraph::{
     petgraph::{visit::EdgeRef, EdgeDirection::Outgoing},
     AnimatorControllerPlugin, AnimatorGraph, Layer, State, Transition,
 };
@@ -15,15 +15,6 @@ use bevy_egui::{
     },
     EguiContext, EguiPlugin,
 };
-
-fn main() {
-    App::build()
-        .add_plugins(DefaultPlugins)
-        .add_plugin(EguiPlugin)
-        .add_plugin(AnimatorControllerPlugin)
-        .add_plugin(AnimatorControllerEditorPlugin)
-        .run();
-}
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -64,7 +55,7 @@ fn animator_graph_editor_system(
         context_menu_position,
     } = &mut *animator_graph_editor;
 
-    egui::Window::new("Animator Graph Editor")
+    egui::Window::new("Animagraph Editor")
         .default_size([800.0, 600.0])
         .open(open)
         .show(egui_context.ctx(), |ui| {
@@ -377,13 +368,7 @@ fn state_widget(
     response
 }
 
-fn line_widget(
-    ui: &mut Ui,
-    rect: Rect,
-    name: impl Into<String>,
-    fill: Color32,
-    selected: bool,
-) -> Response {
+fn line_widget(ui: &mut Ui, line: [Pos2; 2], selected: bool) -> Response {
     todo!()
 }
 

@@ -1,21 +1,15 @@
 [package]
-name = "bevy_animation_controller"
+name = "bevy_animagraph"
 version = "0.1.0"
 authors = ["Felipe Jorge <felipe.jorge.pereira@gmail.com>"]
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[workspace]
+members = ["editor"]
 
 [dependencies]
 bevy = { git = "https://github.com/lassade/bevy", branch = "animations" }
 petgraph = "0.5.1"
 
-[dev-dependencies]
-bevy_egui = { git = "https://github.com/jakobhellermann/bevy_egui", branch = "bevy-main" }
-
 [patch."https://github.com/bevyengine/bevy"]
 bevy = { git = "https://github.com/lassade/bevy", branch = "animations" }
-
-[[example]]
-name = "character"
-path = "examples/character.rs"
