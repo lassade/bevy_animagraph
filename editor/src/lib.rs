@@ -280,6 +280,7 @@ fn animator_graph_editor_system(
                                     if ui.selectable_label(state == 0, "Set as Default").clicked() {
                                         target.mutate().layers[*selected_layer]
                                             .set_default_state(state);
+                                        *selected = None;
                                     }
 
                                     if ui.selectable_label(false, "Delete").clicked() {
@@ -306,6 +307,11 @@ fn animator_graph_editor_system(
                                     target.mutate().layers[*selected_layer]
                                         .graph
                                         .remove_node((*index).into());
+                                }
+                                Some(Selected::Transition(index)) => {
+                                    target.mutate().layers[*selected_layer]
+                                        .graph
+                                        .remove_edge((*index).into());
                                 }
                                 _ => {}
                             }

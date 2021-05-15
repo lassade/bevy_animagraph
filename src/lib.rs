@@ -150,44 +150,42 @@ impl Default for Layer {
 
 impl Layer {
     pub fn set_default_state(&mut self, state: u32) -> bool {
-        if (state as usize) >= self.graph.node_count() {
+        if state == 0 || (state as usize) >= self.graph.node_count() {
             return false;
         }
 
         // TODO: Theres got to be a better way of doing this
 
+        let mut temp = Graph::with_capacity(self.graph.node_count(), self.graph.edge_count());
+        std::mem::swap(&mut temp, &mut self.graph);
+
+        let (mut nodes, edges) = temp.into_nodes_edges();
+        nodes[..].swap(0, state as usize);
+
         let default_state = 0.into();
         let state = state.into();
-        let mut graph: Graph<State, Transition> =
-            Graph::from_edges(self.graph.raw_edges().iter().map(|edge| {
-                let mut source = edge.source();
-                if source == state {
-                    source = default_state;
-                } else if source == default_state {
-                    source = state;
-                }
 
-                let mut target = edge.target();
-                if target == state {
-                    target = default_state;
-                } else if target == default_state {
-                    target = state;
-                }
-
-                (source, target, edge.weight.clone())
-            }));
-
-        for (i, w) in graph.node_weights_mut().enumerate() {
-            let mut i = (i as u32).into();
-            if state == i {
-                i = default_state;
-            } else if default_state == i {
-                i = state;
-            }
-            std::mem::swap(w, self.graph.node_weight_mut(i).unwrap());
+        for node in nodes {
+            self.graph.add_node(node.weight);
         }
 
-        self.graph = graph;
+        for edge in edges {
+            let mut source = edge.source();
+            if source == state {
+                source = default_state;
+            } else if source == default_state {
+                source = state;
+            }
+
+            let mut target = edge.target();
+            if target == state {
+                target = default_state;
+            } else if target == default_state {
+                target = state;
+            }
+
+            self.graph.add_edge(source, target, edge.weight);
+        }
 
         true
     }
