@@ -6,14 +6,14 @@ use bevy::{
 };
 use bevy_animagraph::{
     petgraph::{visit::EdgeRef, EdgeDirection::Outgoing},
-    AnimatorControllerPlugin, AnimatorGraph, Layer, State, Transition,
+    AnimatorGraph, Layer, State, Transition,
 };
 use bevy_egui::{
     egui::{
-        self, emath::NumExt, pos2, vec2, Align, Button, Color32, Key, Label, Layout, Pos2, Rect,
-        Response, Sense, Stroke, TextStyle, Ui, Vec2, WidgetInfo, WidgetType,
+        self, emath::NumExt, pos2, vec2, Align, Button, Color32, Key, Label, Layout, PointerButton,
+        Pos2, Rect, Response, Sense, Stroke, TextStyle, Ui, Vec2, WidgetInfo, WidgetType,
     },
-    EguiContext, EguiPlugin,
+    EguiContext,
 };
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -116,6 +116,7 @@ fn animator_graph_editor_system(
                         let position_offset = rect.min.to_vec2() + *position;
 
                         // Draw transitions
+                        let mut transition_selection = None;
                         for index in 0..graph.node_count() {
                             let index = index as u32;
 
@@ -124,18 +125,15 @@ fn animator_graph_editor_system(
 
                             for edge in graph.edges_directed(index.into(), Outgoing) {
                                 if let Some(target) = graph.node_weight(edge.target()) {
+                                    let current_transition =
+                                        Some(Selected::Transition(edge.id().index() as u32));
+
                                     let p1 = state_pos(target) + position_offset;
-                                    let v = p0 - p1;
-                                    let n = vec2(v.y, -v.x).normalized() * 10.0;
-                                    ui.painter().line_segment(
-                                        [p0 + n, p1 + n],
-                                        Stroke {
-                                            width: 1.0,
-                                            color: Color32::WHITE,
-                                        },
-                                    );
+                                    if line_widget(ui, [p0, p1], *selected == current_transition) {
+                                        transition_selection = current_transition;
+                                    }
                                 } else {
-                                    // TODO: Remove edge
+                                    // TODO: Remove invalid edge
                                 }
                             }
                         }
@@ -161,7 +159,7 @@ fn animator_graph_editor_system(
                         for index in 0..graph.node_count() {
                             let index = index as u32;
                             let state = graph.node_weight_mut(index.into()).unwrap();
-                            let selection_index = Some(Selected::State(index as u32));
+                            let state_selection = Some(Selected::State(index as u32));
 
                             let center = state_pos(state) + position_offset;
                             let rect = Rect::from_center_size(center, vec2(180.0, 40.0));
@@ -176,7 +174,7 @@ fn animator_graph_editor_system(
                                 rect,
                                 &state.name,
                                 fill,
-                                selection_index == *selected,
+                                state_selection == *selected,
                             );
 
                             if response.clicked() {
@@ -192,13 +190,18 @@ fn animator_graph_editor_system(
                                     }
                                     _ => {}
                                 }
-                                *selected = selection_index;
+                                *selected = state_selection;
                             } else if response.secondary_clicked() {
-                                *selected = selection_index;
+                                *selected = state_selection;
                             } else if response.dragged_by(egui::PointerButton::Primary) {
                                 // Drag node
                                 let delta: [f32; 2] = response.drag_delta().into();
                                 state.position += delta.into();
+                            }
+
+                            // Clear transition selection
+                            if response.hovered() {
+                                transition_selection = None;
                             }
 
                             // Open state menu
@@ -228,6 +231,16 @@ fn animator_graph_editor_system(
                                     *context_menu_position = cursor_position;
                                     ui.memory().open_popup(layer_menu_id);
                                 }
+                            }
+                        }
+
+                        // Handle selection
+                        if response.clicked() {
+                            if transition_selection.is_some() {
+                                *selected = transition_selection;
+                            } else {
+                                // Deselect
+                                *selected = None;
                             }
                         }
 
@@ -368,8 +381,46 @@ fn state_widget(
     response
 }
 
-fn line_widget(ui: &mut Ui, line: [Pos2; 2], selected: bool) -> Response {
-    todo!()
+fn line_widget(ui: &mut Ui, line: [Pos2; 2], selected: bool) -> bool {
+    let [mut p0, mut p1] = line;
+
+    let mut v = p1 - p0;
+    let m = v.length();
+    v = v / m.max(1e-12);
+
+    let n = vec2(-v.y, v.x) * 12.0;
+    p0 += n;
+    p1 += n;
+
+    let hover = if let Some(pos) = ui.input().pointer.hover_pos() {
+        let u = pos - p0;
+        let n = u.x * v.x + u.y * v.y;
+        let d = u - n.clamp(0.0, m) * v;
+        d.length() <= 8.0
+    } else {
+        false
+    };
+
+    let stroke = if selected {
+        Stroke {
+            width: 2.0,
+            color: Color32::LIGHT_GRAY,
+        }
+    } else if hover {
+        Stroke {
+            width: 2.0,
+            color: Color32::GRAY,
+        }
+    } else {
+        Stroke {
+            width: 1.0,
+            color: Color32::GRAY,
+        }
+    };
+
+    ui.painter().line_segment([p0, p1], stroke);
+
+    hover
 }
 
 fn draw_grid(ui: &Ui, rect: Rect, offset: Vec2, size: Vec2) {

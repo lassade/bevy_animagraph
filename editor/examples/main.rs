@@ -1,5 +1,3 @@
-use std::f32::EPSILON;
-
 use bevy::prelude::*;
 use bevy_animagraph::AnimatorControllerPlugin;
 use bevy_animagraph_editor::AnimatorControllerEditorPlugin;
