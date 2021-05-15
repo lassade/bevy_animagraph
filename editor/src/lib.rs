@@ -41,6 +41,9 @@ struct AnimatorGraphEditor {
     context_menu_position: Pos2,
 }
 
+const STATE_SIZE: Vec2 = vec2(180.0, 40.0);
+const ARROW_SIZE: f32 = 8.0;
+
 fn animator_graph_editor_system(
     mut animator_graph_editor: ResMut<AnimatorGraphEditor>,
     mut animator_graphs: ResMut<Assets<AnimatorGraph>>,
@@ -150,9 +153,15 @@ fn animator_graph_editor_system(
                             }
                         }
                         // Draw transitions
-                        for (_, (count, p0, p1, current_transition, selected)) in temp_buffer {
-                            if line_widget(ui, [p0, p1], count > 1, selected) {
-                                transition_selection = current_transition;
+                        for ((a, b), (count, p0, p1, current_transition, selected)) in temp_buffer {
+                            if a == b {
+                                if self_transition_widget(ui, p0, count > 1, selected) {
+                                    transition_selection = current_transition;
+                                }
+                            } else {
+                                if transition_widget(ui, [p0, p1], count > 1, selected) {
+                                    transition_selection = current_transition;
+                                }
                             }
                         }
 
@@ -180,7 +189,7 @@ fn animator_graph_editor_system(
                             let state_selection = Some(Selected::State(index as u32));
 
                             let center = state_pos(state) + position_offset;
-                            let rect = Rect::from_center_size(center, vec2(180.0, 40.0));
+                            let rect = Rect::from_center_size(center, STATE_SIZE);
                             let fill = if index == 0 {
                                 Color32::from_rgb(200, 70, 0)
                             } else {
@@ -405,7 +414,7 @@ fn state_widget(
     response
 }
 
-fn line_widget(ui: &mut Ui, line: [Pos2; 2], many: bool, selected: bool) -> bool {
+fn transition_widget(ui: &mut Ui, line: [Pos2; 2], many: bool, selected: bool) -> bool {
     let [mut p0, mut p1] = line;
 
     let v = p1 - p0;
@@ -444,9 +453,8 @@ fn line_widget(ui: &mut Ui, line: [Pos2; 2], many: bool, selected: bool) -> bool
 
     ui.painter().line_segment([p0, p1], stroke);
 
-    const SIZE: f32 = 8.0;
-    let right = n * SIZE;
-    let forward = v_normalized * SIZE;
+    let right = n * ARROW_SIZE;
+    let forward = v_normalized * ARROW_SIZE;
     let mut t0 = p0 + (v * 0.5);
     let mut t1 = t0 - forward;
     let mut t2 = t1 - right;
@@ -464,6 +472,61 @@ fn line_widget(ui: &mut Ui, line: [Pos2; 2], many: bool, selected: bool) -> bool
         t0 -= back;
         t1 -= back;
         t2 -= back;
+        draw_triangle(ui, t0, t1, t2, stroke);
+    }
+
+    hover
+}
+
+fn self_transition_widget(ui: &mut Ui, pos: Pos2, many: bool, selected: bool) -> bool {
+    let center = pos - STATE_SIZE * 0.5;
+    let radius = vec2(20.0, 20.0);
+    let area = Rect {
+        min: center - radius,
+        max: center + radius,
+    };
+
+    let hover = ui
+        .input()
+        .pointer
+        .hover_pos()
+        .map_or(false, |pos| area.contains(pos));
+
+    let stroke = if selected {
+        Stroke {
+            width: 2.0,
+            color: Color32::LIGHT_GRAY,
+        }
+    } else if hover {
+        Stroke {
+            width: 2.0,
+            color: Color32::GRAY,
+        }
+    } else {
+        Stroke {
+            width: 1.0,
+            color: Color32::GRAY,
+        }
+    };
+
+    ui.painter().circle_stroke(center, 20.0, stroke);
+
+    const DIAG: Vec2 = vec2(0.707106781, 0.707106781);
+    const NORMAL: Vec2 = vec2(-0.707106781, 0.707106781);
+
+    let right = DIAG * ARROW_SIZE;
+    let forward = NORMAL * ARROW_SIZE;
+    let mut t0 = center - (DIAG * 20.0);
+    let mut t1 = t0 - forward;
+    let mut t2 = t1 - right;
+    t1 += right;
+
+    draw_triangle(ui, t0, t1, t2, stroke);
+
+    if many {
+        t0 += forward;
+        t1 += forward;
+        t2 += forward;
         draw_triangle(ui, t0, t1, t2, stroke);
     }
 
