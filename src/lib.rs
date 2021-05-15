@@ -110,15 +110,15 @@ impl Param {
 
 #[derive(Debug, TypeUuid)]
 #[uuid = "6b7c940d-a698-40ae-9ff2-b08747d6e8e1"]
-pub struct AnimatorGraph {
+pub struct Animagraph {
     pub name: String,
     pub parameters: HashMap<String, Param>,
     pub layers: Vec<Layer>,
 }
 
-impl Default for AnimatorGraph {
+impl Default for Animagraph {
     fn default() -> Self {
-        AnimatorGraph {
+        Animagraph {
             name: String::default(),
             parameters: HashMap::default(),
             layers: vec![Layer {
@@ -362,16 +362,16 @@ impl GraphInfo {
 
 #[derive(Debug, Reflect)]
 #[reflect(Component)]
-pub struct AnimatorController {
-    graph: Handle<AnimatorGraph>,
+pub struct AnimagraphPlayer {
+    graph: Handle<Animagraph>,
     #[reflect(ignore)]
     runtime: Option<GraphInfo>,
     pub time_scale: f32,
 }
 
-impl Default for AnimatorController {
+impl Default for AnimagraphPlayer {
     fn default() -> Self {
-        AnimatorController {
+        AnimagraphPlayer {
             graph: Handle::default(),
             runtime: None,
             time_scale: 1.0,
@@ -379,13 +379,13 @@ impl Default for AnimatorController {
     }
 }
 
-impl AnimatorController {
-    pub fn set_graph(&mut self, graph: Handle<AnimatorGraph>) {
+impl AnimagraphPlayer {
+    pub fn set_graph(&mut self, graph: Handle<Animagraph>) {
         self.graph = graph;
         self.runtime = None;
     }
 
-    pub fn graph(&self) -> &Handle<AnimatorGraph> {
+    pub fn graph(&self) -> &Handle<Animagraph> {
         &self.graph
     }
 
@@ -397,16 +397,16 @@ impl AnimatorController {
 pub(crate) fn animator_controller_system(
     time: Res<Time>,
     clips: Res<Assets<Clip>>,
-    graphs: Res<Assets<AnimatorGraph>>,
+    graphs: Res<Assets<Animagraph>>,
     //mut clip_events: EventReader<AssetEvent<Clip>>,
-    mut graph_events: EventReader<AssetEvent<AnimatorGraph>>,
-    mut controllers: Query<(&mut Animator, &mut AnimatorController)>,
+    mut graph_events: EventReader<AssetEvent<Animagraph>>,
+    mut controllers: Query<(&mut Animator, &mut AnimagraphPlayer)>,
 ) {
     let clips = &*clips;
     let delta_time = time.delta_seconds();
 
     // Query all graphs that need to be invalidated
-    let mut invalidate: HashSet<Handle<AnimatorGraph>> = HashSet::default();
+    let mut invalidate: HashSet<Handle<Animagraph>> = HashSet::default();
     for event in graph_events.iter() {
         match event {
             AssetEvent::Created { handle }
@@ -420,7 +420,7 @@ pub(crate) fn animator_controller_system(
     for (mut animator, mut controller) in controllers.iter_mut() {
         let animator: &mut Animator = &mut *animator;
 
-        let controller: &mut AnimatorController = &mut *controller;
+        let controller: &mut AnimagraphPlayer = &mut *controller;
         let delta_time = delta_time * controller.time_scale;
 
         // Invalidate controller because it was changed,
@@ -681,8 +681,8 @@ pub struct AnimatorControllerPlugin;
 
 impl Plugin for AnimatorControllerPlugin {
     fn build(&self, app: &mut bevy::prelude::AppBuilder) {
-        app.add_asset::<AnimatorGraph>()
-            .register_type::<AnimatorController>()
+        app.add_asset::<Animagraph>()
+            .register_type::<AnimagraphPlayer>()
             .add_system_to_stage(
                 AnimationStage::Animate,
                 animator_controller_system

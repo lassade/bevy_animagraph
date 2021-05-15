@@ -7,7 +7,7 @@ use bevy::{
 };
 use bevy_animagraph::{
     petgraph::{visit::EdgeRef, EdgeDirection::Outgoing},
-    AnimatorGraph, Layer, State, Transition,
+    Animagraph, Layer, State, Transition,
 };
 use bevy_egui::{
     egui::{
@@ -31,25 +31,46 @@ enum EditorOperation {
     AddingTransition { state: u32, position: Pos2 },
 }
 
-struct AnimatorGraphEditor {
+struct TransitionGroup {
+    index: u32,
+    count: usize,
+    p0: Pos2,
+    p1: Pos2,
+}
+
+#[derive(Default)]
+struct Cache {
+    target: Option<Handle<Animagraph>>,
+    grouped_transitions: HashMap<(u32, u32), TransitionGroup>,
+}
+
+impl Cache {
+    fn clear(&mut self) {
+        self.target = None;
+        self.grouped_transitions.clear();
+    }
+}
+
+struct AnimagraphEditor {
     open: bool,
-    editing: Option<Handle<AnimatorGraph>>,
+    editing: Option<Handle<Animagraph>>,
     operation: EditorOperation,
     position: Vec2,
     selected: Option<Selected>,
     selected_layer: usize,
     context_menu_position: Pos2,
+    cache: Cache,
 }
 
 const STATE_SIZE: Vec2 = vec2(180.0, 40.0);
 const ARROW_SIZE: f32 = 8.0;
 
 fn animator_graph_editor_system(
-    mut animator_graph_editor: ResMut<AnimatorGraphEditor>,
-    mut animator_graphs: ResMut<Assets<AnimatorGraph>>,
+    mut graph_editor: ResMut<AnimagraphEditor>,
+    mut graphs: ResMut<Assets<Animagraph>>,
     egui_context: Res<EguiContext>,
 ) {
-    let AnimatorGraphEditor {
+    let AnimagraphEditor {
         open,
         editing,
         operation,
@@ -57,7 +78,14 @@ fn animator_graph_editor_system(
         selected,
         selected_layer,
         context_menu_position,
-    } = &mut *animator_graph_editor;
+        cache,
+    } = &mut *graph_editor;
+
+    // Clear cache
+    if cache.target != *editing {
+        cache.clear();
+        cache.target = editing.clone();
+    }
 
     egui::Window::new("Animagraph Editor")
         .default_size([800.0, 600.0])
@@ -67,7 +95,7 @@ fn animator_graph_editor_system(
             let (id, rect) = ui.allocate_space(ui.available_size());
 
             if let Some(graph_handle) = editing {
-                if let Some(mut target) = Modify::new(&mut *animator_graphs, &*graph_handle) {
+                if let Some(mut target) = Modify::new(&mut *graphs, &*graph_handle) {
                     let layer_count = target.view().layers.len();
                     if *selected_layer > layer_count {
                         *selected_layer = 0;
@@ -120,7 +148,6 @@ fn animator_graph_editor_system(
                         let position_offset = rect.min.to_vec2() + *position;
 
                         // Draw transitions
-                        let mut temp_buffer = HashMap::default();
                         let mut transition_selection = None;
                         // Find transition
                         for source_index in 0..graph.node_count() {
@@ -131,37 +158,50 @@ fn animator_graph_editor_system(
 
                             for edge in graph.edges_directed(source_index, Outgoing) {
                                 if let Some(target) = graph.node_weight(edge.target()) {
-                                    temp_buffer
-                                        .entry((source_index, edge.target()))
-                                        .or_insert_with(|| {
-                                            let p1: Pos2 = state_pos(target) + position_offset;
-                                            let current_transition = Some(Selected::Transition(
-                                                edge.id().index() as u32,
-                                            ));
-                                            (
-                                                0,
-                                                p0,
-                                                p1,
-                                                current_transition,
-                                                *selected == current_transition,
-                                            )
-                                        })
-                                        .0 += 1;
+                                    let p1 = state_pos(target) + position_offset;
+                                    let group = cache
+                                        .grouped_transitions
+                                        .entry((
+                                            edge.source().index() as u32,
+                                            edge.target().index() as u32,
+                                        ))
+                                        .or_insert_with(|| TransitionGroup {
+                                            index: edge.id().index() as u32,
+                                            count: 0,
+                                            p0,
+                                            p1,
+                                        });
+
+                                    group.count += 1;
+                                    // NOTE: Done multiple times, but hopefully not as expensive
+                                    group.p0 = p0;
+                                    group.p1 = p1;
                                 } else {
                                     // TODO: Remove invalid edge
                                 }
                             }
                         }
                         // Draw transitions
-                        for ((a, b), (count, p0, p1, current_transition, selected)) in temp_buffer {
-                            if a == b {
-                                if self_transition_widget(ui, p0, count > 1, selected) {
-                                    transition_selection = current_transition;
-                                }
+                        for ((a, b), group) in &mut cache.grouped_transitions {
+                            let TransitionGroup {
+                                index,
+                                count,
+                                p0,
+                                p1,
+                            } = group;
+
+                            let many = *count > 1;
+                            *count = 0;
+
+                            let current = Some(Selected::Transition(*index));
+                            let is_selected = *selected == current;
+
+                            if if *a == *b {
+                                self_transition_widget(ui, *p0, many, is_selected)
                             } else {
-                                if transition_widget(ui, [p0, p1], count > 1, selected) {
-                                    transition_selection = current_transition;
-                                }
+                                transition_widget(ui, [*p0, *p1], many, is_selected)
+                            } {
+                                transition_selection = current;
                             }
                         }
 
@@ -345,6 +385,11 @@ fn animator_graph_editor_system(
                             *selected = None;
                         }
                     }
+
+                    // Clear cache when the graph is modified
+                    if target.is_modified() {
+                        cache.clear();
+                    }
                 } else {
                     *editing = None;
                 }
@@ -361,7 +406,7 @@ fn animator_graph_editor_system(
                     "Create Graph",
                 );
                 if response.clicked() {
-                    *editing = Some(animator_graphs.add(AnimatorGraph::default()));
+                    *editing = Some(graphs.add(Animagraph::default()));
                 }
             }
         });
@@ -611,6 +656,10 @@ impl<'a, T: Asset> Modify<'a, T> {
         }
     }
 
+    pub fn is_modified(&self) -> bool {
+        self.modified
+    }
+
     #[inline(always)]
     pub fn view(&self) -> &T {
         self.target
@@ -643,7 +692,7 @@ pub struct AnimatorControllerEditorPlugin;
 
 impl Plugin for AnimatorControllerEditorPlugin {
     fn build(&self, app: &mut bevy::prelude::AppBuilder) {
-        app.insert_resource(AnimatorGraphEditor {
+        app.insert_resource(AnimagraphEditor {
             open: true,
             editing: None,
             operation: EditorOperation::None,
@@ -651,6 +700,7 @@ impl Plugin for AnimatorControllerEditorPlugin {
             selected: None,
             selected_layer: 0,
             context_menu_position: Pos2::ZERO,
+            cache: Cache::default(),
         })
         .add_system_to_stage(CoreStage::PostUpdate, animator_graph_editor_system.system());
     }
