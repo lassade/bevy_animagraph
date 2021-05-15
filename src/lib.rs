@@ -290,7 +290,18 @@ pub struct Transition {
 pub struct StateInfo {
     state: u32,
     duration: f32,
+    pub loop_count: u32,
     pub normalized_time: f32,
+}
+
+impl StateInfo {
+    pub fn state(&self) -> u32 {
+        self.state
+    }
+
+    pub fn duration(&self) -> f32 {
+        self.duration
+    }
 }
 
 #[derive(Debug)]
@@ -300,6 +311,16 @@ pub struct TransitionInfo {
     pub normalized_time: f32,
 }
 
+impl TransitionInfo {
+    pub fn index(&self) -> u32 {
+        self.index
+    }
+
+    pub fn to(&self) -> &StateInfo {
+        &self.to
+    }
+}
+
 #[derive(Debug)]
 pub struct LayerInfo {
     current_state: StateInfo,
@@ -307,10 +328,38 @@ pub struct LayerInfo {
     pub weight: f32,
 }
 
+impl LayerInfo {
+    pub fn current_state(&self) -> &StateInfo {
+        &self.current_state
+    }
+
+    pub fn transition(&self) -> Option<&TransitionInfo> {
+        self.transition.as_ref()
+    }
+}
+
 #[derive(Debug)]
 pub struct GraphInfo {
     layers: Vec<LayerInfo>,
-    parameters: HashMap<String, Param>,
+    params: HashMap<String, Param>,
+}
+
+impl GraphInfo {
+    pub fn layers(&self) -> &[LayerInfo] {
+        &self.layers[..]
+    }
+
+    pub fn params(&self) -> &HashMap<String, Param> {
+        &self.params
+    }
+
+    pub fn set_param<S>(&mut self, name: &str, param: Param) {
+        match self.params.get_mut(name) {
+            Some(Param::Float(v)) => *v = param.as_float().unwrap_or(0.0),
+            Some(Param::Bool(v)) => *v = param.as_bool().unwrap_or(false),
+            _ => {}
+        }
+    }
 }
 
 #[derive(Debug, Reflect)]
@@ -340,6 +389,10 @@ impl AnimatorController {
 
     pub fn graph(&self) -> &Handle<AnimatorGraph> {
         &self.graph
+    }
+
+    pub fn runtime(&self) -> &Option<GraphInfo> {
+        &self.runtime
     }
 }
 
@@ -400,7 +453,10 @@ pub(crate) fn animator_controller_system(
                     })
                     .collect();
 
-                GraphInfo { layers, parameters }
+                GraphInfo {
+                    layers,
+                    params: parameters,
+                }
             });
 
             // Clear previous frame layers
@@ -408,7 +464,7 @@ pub(crate) fn animator_controller_system(
 
             // Needed for the borrow checker
             let layers = &mut runtime.layers;
-            let parameters = &mut runtime.parameters;
+            let parameters = &mut runtime.params;
 
             // Execute
             for (layer_index, layer_info) in layers.iter_mut().enumerate() {
@@ -518,10 +574,14 @@ fn update_transition(
                     }
                     Condition::ExitTime { time } => {
                         let state_info = &layer_info.current_state;
-                        *time > state_info.normalized_time * state_info.duration
+                        let normalized_total_time =
+                            state_info.normalized_time + state_info.loop_count as f32;
+                        *time > normalized_total_time * state_info.duration
                     }
                     Condition::ExitTimeNormalized { normalized_time } => {
-                        *normalized_time > layer_info.current_state.normalized_time
+                        let state_info = &layer_info.current_state;
+                        *normalized_time
+                            > (state_info.normalized_time + state_info.loop_count as f32)
                     }
                 })
         })
@@ -534,6 +594,7 @@ fn update_transition(
                 to: StateInfo {
                     state: state_index as u32,
                     duration: 0.0,
+                    loop_count: 0,
                     normalized_time: state_node
                         .weight
                         .offset
@@ -572,6 +633,7 @@ fn update_state(
                 if n > 1.0 {
                     if clip.warp {
                         n = n.fract();
+                        state_info.loop_count += 1;
                     } else {
                         n = 1.0;
                     }
