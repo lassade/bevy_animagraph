@@ -3,6 +3,7 @@ use std::f32::EPSILON;
 use bevy::{
     asset::{Asset, HandleId},
     prelude::*,
+    utils::HashMap,
 };
 use bevy_animagraph::{
     petgraph::{visit::EdgeRef, EdgeDirection::Outgoing},
@@ -116,25 +117,42 @@ fn animator_graph_editor_system(
                         let position_offset = rect.min.to_vec2() + *position;
 
                         // Draw transitions
+                        let mut temp_buffer = HashMap::default();
                         let mut transition_selection = None;
-                        for index in 0..graph.node_count() {
-                            let index = index as u32;
+                        // Find transition
+                        for source_index in 0..graph.node_count() {
+                            let source_index = (source_index as u32).into();
 
-                            let state = graph.node_weight_mut(index.into()).unwrap();
-                            let p0 = state_pos(state) + position_offset;
+                            let state = graph.node_weight_mut(source_index).unwrap();
+                            let p0: Pos2 = state_pos(state) + position_offset;
 
-                            for edge in graph.edges_directed(index.into(), Outgoing) {
+                            for edge in graph.edges_directed(source_index, Outgoing) {
                                 if let Some(target) = graph.node_weight(edge.target()) {
-                                    let current_transition =
-                                        Some(Selected::Transition(edge.id().index() as u32));
-
-                                    let p1 = state_pos(target) + position_offset;
-                                    if line_widget(ui, [p0, p1], *selected == current_transition) {
-                                        transition_selection = current_transition;
-                                    }
+                                    temp_buffer
+                                        .entry((source_index, edge.target()))
+                                        .or_insert_with(|| {
+                                            let p1: Pos2 = state_pos(target) + position_offset;
+                                            let current_transition = Some(Selected::Transition(
+                                                edge.id().index() as u32,
+                                            ));
+                                            (
+                                                0,
+                                                p0,
+                                                p1,
+                                                current_transition,
+                                                *selected == current_transition,
+                                            )
+                                        })
+                                        .0 += 1;
                                 } else {
                                     // TODO: Remove invalid edge
                                 }
+                            }
+                        }
+                        // Draw transitions
+                        for (_, (count, p0, p1, current_transition, selected)) in temp_buffer {
+                            if line_widget(ui, [p0, p1], count > 1, selected) {
+                                transition_selection = current_transition;
                             }
                         }
 
@@ -387,21 +405,21 @@ fn state_widget(
     response
 }
 
-fn line_widget(ui: &mut Ui, line: [Pos2; 2], selected: bool) -> bool {
+fn line_widget(ui: &mut Ui, line: [Pos2; 2], many: bool, selected: bool) -> bool {
     let [mut p0, mut p1] = line;
 
-    let mut v = p1 - p0;
+    let v = p1 - p0;
     let m = v.length();
-    v = v / m.max(1e-12);
-
-    let n = vec2(-v.y, v.x) * 12.0;
-    p0 += n;
-    p1 += n;
+    let v_normalized = v / m.max(1e-12);
+    let n = vec2(-v_normalized.y, v_normalized.x);
+    let lane_offset = n * 12.0;
+    p0 += lane_offset;
+    p1 += lane_offset;
 
     let hover = if let Some(pos) = ui.input().pointer.hover_pos() {
         let u = pos - p0;
-        let n = u.x * v.x + u.y * v.y;
-        let d = u - n.clamp(0.0, m) * v;
+        let n = u.x * v_normalized.x + u.y * v_normalized.y;
+        let d = u - n.clamp(0.0, m) * v_normalized;
         d.length() <= 8.0
     } else {
         false
@@ -426,7 +444,38 @@ fn line_widget(ui: &mut Ui, line: [Pos2; 2], selected: bool) -> bool {
 
     ui.painter().line_segment([p0, p1], stroke);
 
+    const SIZE: f32 = 8.0;
+    let right = n * SIZE;
+    let forward = v_normalized * SIZE;
+    let mut t0 = p0 + (v * 0.5);
+    let mut t1 = t0 - forward;
+    let mut t2 = t1 - right;
+    t1 += right;
+
+    draw_triangle(ui, t0, t1, t2, stroke);
+
+    if many {
+        t0 += forward;
+        t1 += forward;
+        t2 += forward;
+        draw_triangle(ui, t0, t1, t2, stroke);
+
+        let back = forward * 2.0;
+        t0 -= back;
+        t1 -= back;
+        t2 -= back;
+        draw_triangle(ui, t0, t1, t2, stroke);
+    }
+
     hover
+}
+
+#[inline]
+fn draw_triangle(ui: &Ui, t0: Pos2, t1: Pos2, t2: Pos2, stroke: impl Into<Stroke>) {
+    let stroke = stroke.into();
+    ui.painter().line_segment([t0, t1], stroke);
+    ui.painter().line_segment([t1, t2], stroke);
+    ui.painter().line_segment([t2, t0], stroke);
 }
 
 fn draw_grid(ui: &Ui, rect: Rect, offset: Vec2, size: Vec2) {

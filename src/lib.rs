@@ -1,6 +1,9 @@
 pub extern crate petgraph;
 
-use std::f32::EPSILON;
+use std::{
+    f32::EPSILON,
+    ops::{Deref, DerefMut},
+};
 
 use bevy::{
     animation::{AnimationStage, AnimationSystem, Animator, Clip},
@@ -200,6 +203,8 @@ pub struct State {
     pub offset: Var<f32>,
     /// State data
     pub data: StateData,
+    /// Restart conditions, same of transition to self
+    pub restart_conditions: Vec<Transition>,
 }
 
 impl Default for State {
@@ -209,6 +214,7 @@ impl Default for State {
             position: Vec2::ZERO,
             offset: Var::Value(0.0),
             data: StateData::Marker,
+            restart_conditions: vec![],
         }
     }
 }
@@ -286,15 +292,15 @@ pub struct Transition {
 
 #[derive(Default, Debug, Copy, Clone)]
 pub struct StateInfo {
-    state: u32,
+    state_index: u32,
     duration: f32,
     pub loop_count: u32,
     pub normalized_time: f32,
 }
 
 impl StateInfo {
-    pub fn state(&self) -> u32 {
-        self.state
+    pub fn state_index(&self) -> u32 {
+        self.state_index
     }
 
     pub fn duration(&self) -> f32 {
@@ -304,16 +310,12 @@ impl StateInfo {
 
 #[derive(Debug)]
 pub struct TransitionInfo {
-    index: u32,
     to: StateInfo,
+    length: f32,
     pub normalized_time: f32,
 }
 
 impl TransitionInfo {
-    pub fn index(&self) -> u32 {
-        self.index
-    }
-
     pub fn to(&self) -> &StateInfo {
         &self.to
     }
@@ -481,7 +483,7 @@ pub(crate) fn animator_controller_system(
                     if let Some(state_node) = layer
                         .graph
                         .raw_nodes()
-                        .get(transition_info.to.state as usize)
+                        .get(transition_info.to.state_index as usize)
                     {
                         update_state(
                             animator,
@@ -501,7 +503,7 @@ pub(crate) fn animator_controller_system(
                 if let Some(state_node) = layer
                     .graph
                     .raw_nodes()
-                    .get(layer_info.current_state.state as usize)
+                    .get(layer_info.current_state.state_index as usize)
                 {
                     update_state(
                         animator,
@@ -526,86 +528,120 @@ fn update_transition(
     delta_time: f32,
 ) {
     if let Some(transition_info) = &mut layer_info.transition {
-        if let Some(transition_edge) = layer.graph.raw_edges().get(transition_info.index as usize) {
-            transition_info.normalized_time += delta_time / transition_edge.weight.length;
+        transition_info.normalized_time += delta_time / transition_info.length;
 
-            if transition_info.normalized_time > 1.0 {
-                // Transition is done
-                layer_info.current_state = transition_info.to;
-            } else {
-                // Transition still in progress
-                // TODO: Interrupt sources
-                return;
-            }
+        // TODO: Interrupt sources
+        if transition_info.normalized_time > 1.0 {
+            // Transition is done
+            layer_info.current_state = transition_info.to;
+        } else {
+            // Transition still in progress
+            return;
         }
     }
 
     // Clear transition
     layer_info.transition = None;
 
-    // Check for transitions in the current state
-    if let Some(transition_edge) = layer
-        .graph
-        .edges_directed(layer_info.current_state.state.into(), Outgoing)
-        .find(|transition_edge| {
-            // Check if transition met all their conditions
-            transition_edge
-                .weight()
+    // Reset transitions
+    let current_index = layer_info.current_state.state_index.into();
+    if let Some(current_state) = layer.graph.node_weight(current_index) {
+        if let Some(transition) = current_state.restart_conditions.iter().find(|transition| {
+            transition
                 .conditions
                 .iter()
-                .all(|condition| match condition {
-                    Condition::Bool { x, y } => {
-                        let x = parameters.get(x).and_then(Param::as_bool);
-                        let y = y.get(parameters);
-                        x == y
-                    }
-                    Condition::Float { x, op, y } => {
-                        let x = parameters.get(x).and_then(Param::as_float).unwrap_or(0.0);
-                        let y = y.get(parameters).unwrap_or(0.0);
-                        match op {
-                            Compare::Equal => (x - y).abs() < EPSILON,
-                            Compare::Less => x < y,
-                            Compare::LessOrEqual => x < (y + EPSILON),
-                            Compare::Greater => x > y,
-                            Compare::GreaterOrEqual => x > (y - EPSILON),
-                        }
-                    }
-                    Condition::ExitTime { time } => {
-                        let state_info = &layer_info.current_state;
-                        let normalized_total_time =
-                            state_info.normalized_time + state_info.loop_count as f32;
-                        *time > normalized_total_time * state_info.duration
-                    }
-                    Condition::ExitTimeNormalized { normalized_time } => {
-                        let state_info = &layer_info.current_state;
-                        *normalized_time
-                            > (state_info.normalized_time + state_info.loop_count as f32)
-                    }
-                })
+                .all(|condition| check_condition(parameters, layer_info, condition))
+        }) {
+            start_transition(
+                parameters,
+                layer_info,
+                transition,
+                current_state,
+                current_index.index() as u32,
+            );
+        }
+    }
+
+    // Check for transitions in the current state
+    if let Some((state_index, transition)) = layer
+        .graph
+        .edges_directed(layer_info.current_state.state_index.into(), Outgoing)
+        .find_map(|transition_edge| {
+            // Check if transition met all their conditions
+            let transition = transition_edge.weight();
+            transition
+                .conditions
+                .iter()
+                .all(|condition| check_condition(parameters, layer_info, condition))
+                .then(|| (transition_edge.target(), transition))
         })
     {
         // Start a new transition
-        let state_index = transition_edge.target().index();
-        if let Some(state_node) = layer.graph.raw_nodes().get(state_index) {
-            layer_info.transition = Some(TransitionInfo {
-                index: transition_edge.id().index() as u32,
-                to: StateInfo {
-                    state: state_index as u32,
-                    duration: 0.0,
-                    loop_count: 0,
-                    normalized_time: state_node
-                        .weight
-                        .offset
-                        .get(parameters)
-                        .unwrap_or(0.0)
-                        .fract(),
-                },
-                normalized_time: 0.0,
-            });
+        if let Some(state_node) = layer.graph.node_weight(state_index) {
+            start_transition(
+                parameters,
+                layer_info,
+                transition,
+                state_node,
+                state_index.index() as u32,
+            );
         } else {
             // TODO: Invalid transition
         }
     }
+}
+
+fn check_condition(
+    parameters: &HashMap<String, Param>,
+    layer_info: &LayerInfo,
+    condition: &Condition,
+) -> bool {
+    match condition {
+        Condition::Bool { x, y } => {
+            let x = parameters.get(x).and_then(Param::as_bool);
+            let y = y.get(parameters);
+            x == y
+        }
+        Condition::Float { x, op, y } => {
+            let x = parameters.get(x).and_then(Param::as_float).unwrap_or(0.0);
+            let y = y.get(parameters).unwrap_or(0.0);
+            match op {
+                Compare::Equal => (x - y).abs() < EPSILON,
+                Compare::Less => x < y,
+                Compare::LessOrEqual => x < (y + EPSILON),
+                Compare::Greater => x > y,
+                Compare::GreaterOrEqual => x > (y - EPSILON),
+            }
+        }
+        Condition::ExitTime { time } => {
+            let state_info = &layer_info.current_state;
+            let normalized_total_time = state_info.normalized_time + state_info.loop_count as f32;
+            *time > normalized_total_time * state_info.duration
+        }
+        Condition::ExitTimeNormalized { normalized_time } => {
+            let state_info = &layer_info.current_state;
+            *normalized_time > (state_info.normalized_time + state_info.loop_count as f32)
+        }
+    }
+}
+
+fn start_transition(
+    parameters: &HashMap<String, Param>,
+    layer_info: &mut LayerInfo,
+    transition: &Transition,
+    target_state: &State,
+    target_index: u32,
+) {
+    layer_info.transition = Some(TransitionInfo {
+        length: transition.length,
+        to: StateInfo {
+            state_index: target_index,
+            duration: 0.0,
+            loop_count: 0,
+            normalized_time: target_state.offset.get(parameters).unwrap_or(0.0).fract(),
+        },
+        normalized_time: 0.0,
+    });
 }
 
 fn update_state(
