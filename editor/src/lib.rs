@@ -12,7 +12,8 @@ use bevy_animagraph::{
 use bevy_egui::{
     egui::{
         self, emath::NumExt, pos2, vec2, Align, Button, Color32, Key, Label, Layout, PointerButton,
-        Pos2, Rect, Response, Sense, Stroke, TextStyle, Ui, Vec2, WidgetInfo, WidgetType,
+        Pos2, Rect, Response, Sense, Stroke, TextEdit, TextStyle, Ui, Vec2, Widget, WidgetInfo,
+        WidgetType,
     },
     EguiContext,
 };
@@ -88,11 +89,11 @@ fn animator_graph_editor_system(
     }
 
     egui::Window::new("Animagraph Editor")
-        .default_size([800.0, 600.0])
+        .default_size([1100.0, 600.0])
         .open(open)
         .show(egui_context.ctx(), |ui| {
             //let rect = ui.available_rect_before_wrap();
-            let (id, rect) = ui.allocate_space(ui.available_size());
+            let (id, mut rect) = ui.allocate_space(ui.available_size());
 
             if let Some(graph_handle) = editing {
                 if let Some(mut target) = Modify::new(&mut *graphs, &*graph_handle) {
@@ -112,19 +113,21 @@ fn animator_graph_editor_system(
                         }
                     } else {
                         // Tool bar
+                        const TOOLBAR_HEIGHT: f32 = 25.0;
                         let mut toolbar_rect = rect;
-                        toolbar_rect.max.y = toolbar_rect.min.y + 20.0;
+                        toolbar_rect.max.y = toolbar_rect.min.y + TOOLBAR_HEIGHT;
+                        rect.min.y += TOOLBAR_HEIGHT;
                         ui.allocate_ui_at_rect(toolbar_rect, |ui: &mut Ui| {
                             ui.horizontal(|ui| {
-                                // Graph name
+                                ui.label("Name");
                                 ui.add(
-                                    egui::TextEdit::singleline(
-                                        &mut target.mutate_without_modify().name,
-                                    )
-                                    .desired_width(100.0)
-                                    .hint_text("Name"),
+                                    TextEdit::singleline(&mut target.mutate_without_modify().name)
+                                        .text_style(TextStyle::Button)
+                                        .desired_width(200.0),
                                 );
+
                                 // Select active layer
+                                ui.label("Layer");
                                 egui::ComboBox::from_id_source("layer_select")
                                     .selected_text(&target.view().layers[*selected_layer].name)
                                     .show_ui(ui, |ui| {
@@ -136,6 +139,42 @@ fn animator_graph_editor_system(
                             });
                         });
 
+                        // Inspector
+                        const INSPECTOR_WIDTH: f32 = 300.0;
+                        let mut inspector_rect = rect;
+                        // inspector_rect.max.x = inspector_rect.min.x + INSPECTOR_WIDTH - 6.0;
+                        // rect.min.x += INSPECTOR_WIDTH;
+                        inspector_rect.min.x = inspector_rect.max.x - INSPECTOR_WIDTH;
+                        rect.max.x -= INSPECTOR_WIDTH + 6.0;
+                        ui.allocate_ui_at_rect(inspector_rect, |ui: &mut Ui| match selected {
+                            Some(Selected::State(state)) => {
+                                if let Some(state) = target.mutate_without_modify().layers
+                                    [*selected_layer]
+                                    .graph
+                                    .node_weight_mut((*state).into())
+                                {
+                                    heading(ui, "State");
+                                    field(ui, "Name", |ui| {
+                                        ui.text_edit_singleline(&mut state.name);
+                                    });
+
+                                    ui.add_space(10.0);
+                                    heading(ui, "Transitions");
+                                }
+                            }
+                            Some(Selected::Transition(transition)) => {
+                                heading(ui, "Transition");
+                                let _ = transition;
+                                ui.add_space(10.0);
+                                heading(ui, "Others");
+                            }
+                            None => {
+                                heading(ui, "Parameters");
+                                ui.add_space(10.0);
+                                heading(ui, "Layers");
+                            }
+                        });
+
                         let state_menu_id = id.with("state_menu");
                         let layer_menu_id = id.with("layer_menu");
 
@@ -143,6 +182,7 @@ fn animator_graph_editor_system(
                         let graph =
                             &mut target.mutate_without_modify().layers[*selected_layer].graph;
 
+                        ui.set_clip_rect(rect);
                         draw_grid(ui, rect, *position, vec2(40.0, 40.0));
 
                         let position_offset = rect.min.to_vec2() + *position;
@@ -358,31 +398,54 @@ fn animator_graph_editor_system(
                             }
                         });
 
-                        // Update operation
-                        match operation {
-                            EditorOperation::AddingTransition { position, .. } => {
-                                if let Some(p) = response.hover_pos() {
-                                    *position = p;
-                                }
-                            }
-                            _ => {}
-                        }
+                        // Graph events (cursor needs to stay inside the graph)
+                        if let Some(pos) = ui.input().pointer.hover_pos() {
+                            if rect.contains(pos) {
+                                // Visual feedback of graph editing
 
-                        if delete_selected || ui.input().key_pressed(Key::Delete) {
-                            match selected {
-                                Some(Selected::State(index)) => {
-                                    target.mutate().layers[*selected_layer]
-                                        .graph
-                                        .remove_node((*index).into());
+                                ui.painter().rect_stroke(
+                                    Rect {
+                                        min: rect.min + vec2(0.5, 0.5),
+                                        max: rect.max - vec2(0.5, 0.5),
+                                    },
+                                    0.0,
+                                    Stroke {
+                                        width: 0.5,
+                                        color: Color32::from_gray(100),
+                                    },
+                                );
+
+                                // Update operation
+                                match operation {
+                                    EditorOperation::AddingTransition { position, .. } => {
+                                        if let Some(p) = response.hover_pos() {
+                                            *position = p;
+                                        }
+                                        if ui.input().key_pressed(Key::Escape) {
+                                            *operation = EditorOperation::None;
+                                        }
+                                    }
+                                    _ => {}
                                 }
-                                Some(Selected::Transition(index)) => {
-                                    target.mutate().layers[*selected_layer]
-                                        .graph
-                                        .remove_edge((*index).into());
+
+                                // Delete selection
+                                if delete_selected || ui.input().key_pressed(Key::Delete) {
+                                    match selected {
+                                        Some(Selected::State(index)) => {
+                                            target.mutate().layers[*selected_layer]
+                                                .graph
+                                                .remove_node((*index).into());
+                                        }
+                                        Some(Selected::Transition(index)) => {
+                                            target.mutate().layers[*selected_layer]
+                                                .graph
+                                                .remove_edge((*index).into());
+                                        }
+                                        _ => {}
+                                    }
+                                    *selected = None;
                                 }
-                                _ => {}
                             }
-                            *selected = None;
                         }
                     }
 
@@ -412,12 +475,28 @@ fn animator_graph_editor_system(
         });
 }
 
-#[inline(always)]
+#[inline]
+fn heading(ui: &mut Ui, label: impl Into<String>) {
+    ui.add(Label::new(label).text_style(TextStyle::Button));
+}
+
+#[inline]
+fn field(ui: &mut Ui, label: impl Into<Label>, add_contents: impl FnOnce(&mut Ui)) {
+    ui.horizontal(|ui| {
+        let x = ui.available_width();
+        ui.label(label);
+        ui.add_space((100.0 - x + ui.available_width()).max(0.0));
+        (add_contents)(ui);
+    });
+}
+
+#[inline]
 fn state_pos(state: &State) -> Pos2 {
     let position: [f32; 2] = state.position.into();
     Pos2::from(position)
 }
 
+#[inline]
 fn state_widget(
     ui: &mut Ui,
     rect: Rect,
@@ -440,8 +519,7 @@ fn state_widget(
             &ui.style().visuals.widgets.active
         };
 
-        let text_cursor = ui
-            .layout()
+        let text_cursor = Layout::centered_and_justified(egui::Direction::TopDown)
             .align_size_within_rect(galley.size, rect.shrink2(button_padding))
             .min;
 
@@ -459,6 +537,7 @@ fn state_widget(
     response
 }
 
+#[inline]
 fn transition_widget(ui: &mut Ui, line: [Pos2; 2], many: bool, selected: bool) -> bool {
     let [mut p0, mut p1] = line;
 
@@ -523,6 +602,7 @@ fn transition_widget(ui: &mut Ui, line: [Pos2; 2], many: bool, selected: bool) -
     hover
 }
 
+#[inline]
 fn self_transition_widget(ui: &mut Ui, pos: Pos2, many: bool, selected: bool) -> bool {
     let center = pos - STATE_SIZE * 0.5;
     let radius = vec2(20.0, 20.0);
@@ -586,7 +666,8 @@ fn draw_triangle(ui: &Ui, t0: Pos2, t1: Pos2, t2: Pos2, stroke: impl Into<Stroke
     ui.painter().line_segment([t2, t0], stroke);
 }
 
-fn draw_grid(ui: &Ui, rect: Rect, offset: Vec2, size: Vec2) {
+#[inline]
+fn draw_grid(ui: &Ui, mut rect: Rect, offset: Vec2, size: Vec2) {
     let Rect { min, mut max } = rect;
     max -= vec2(EPSILON, EPSILON);
 
@@ -603,6 +684,10 @@ fn draw_grid(ui: &Ui, rect: Rect, offset: Vec2, size: Vec2) {
         p.line_segment([pos2(min.x, diag.y), pos2(max.x, diag.y)], stroke);
         diag += size;
     }
+
+    rect.min += vec2(0.2, 0.2);
+    rect.max -= vec2(0.2, 0.2);
+    p.rect_stroke(rect, 0.0, stroke);
 }
 
 fn action_needed(
