@@ -52,9 +52,10 @@ impl Cache {
     }
 }
 
-struct AnimagraphEditor {
-    open: bool,
-    editing: Option<Handle<Animagraph>>,
+pub struct AnimagraphEditor {
+    pub open: bool,
+    pub editing: Option<Handle<Animagraph>>,
+    pub live: Option<Entity>,
     operation: EditorOperation,
     position: Vec2,
     selected: Option<Selected>,
@@ -74,6 +75,7 @@ fn animator_graph_editor_system(
     let AnimagraphEditor {
         open,
         editing,
+        live,
         operation,
         position,
         selected,
@@ -814,6 +816,7 @@ impl Plugin for AnimatorControllerEditorPlugin {
         app.insert_resource(AnimagraphEditor {
             open: true,
             editing: None,
+            live: None,
             operation: EditorOperation::None,
             position: Vec2::ZERO,
             selected: None,
