@@ -41,6 +41,7 @@ struct TransitionGroup {
 #[derive(Default)]
 struct Cache {
     target: Option<Handle<Animagraph>>,
+    target_layer: usize,
     grouped_transitions: HashMap<(u32, u32), TransitionGroup>,
 }
 
@@ -87,7 +88,7 @@ fn animator_graph_editor_system(
     } = &mut *graph_editor;
 
     // Clear cache
-    if cache.target != *editing {
+    if cache.target != *editing || cache.target_layer != *selected_layer {
         cache.clear();
         cache.target = editing.clone();
     }
@@ -157,7 +158,21 @@ fn animator_graph_editor_system(
                                     .show_ui(ui, |ui| {
                                         for i in 0..layer_count {
                                             let text = &target.view().layers[i].name;
-                                            ui.selectable_value(selected_layer, i, text);
+                                            if ui
+                                                .selectable_value(selected_layer, i, text)
+                                                .clicked()
+                                            {
+                                                *selected = None;
+                                            }
+                                        }
+                                        if ui.selectable_label(false, "*Create New").clicked() {
+                                            let layers = &mut target.mutate().layers;
+                                            let layers_count = layers.len();
+                                            layers.push(Layer {
+                                                name: format!("Layer{}", layers_count),
+                                                ..Default::default()
+                                            });
+                                            *selected_layer = layer_count;
                                         }
                                     });
                             });
@@ -202,13 +217,11 @@ fn animator_graph_editor_system(
                                 });
 
                                 ui.add_space(10.0);
-
                                 ui.horizontal(|ui| {
                                     heading(ui, "Parameters");
 
                                     let param_menu_id = id.with("param_menu");
-                                    let mut response =
-                                        ui.add(Label::new("➕").sense(Sense::click()));
+                                    let mut response = ui.selectable_label(false, "➕");
                                     if response.clicked() {
                                         ui.memory().toggle_popup(param_menu_id);
                                     }
@@ -243,7 +256,6 @@ fn animator_graph_editor_system(
                                 for (param_id, name, param) in parameters.iter_mut() {
                                     ui.horizontal(|ui| {
                                         let x = ui.available_width();
-
                                         if label_editable(ui, id.with(param_id), name, temp_buffer)
                                         {
                                             param_op = ParamOp::Rename(name.clone());
@@ -265,8 +277,7 @@ fn animator_graph_editor_system(
                                             }
                                         }
 
-                                        if ui.add(Label::new("✖").sense(Sense::click())).clicked()
-                                        {
+                                        if ui.selectable_label(false, "✖").clicked() {
                                             param_op = ParamOp::Remove(name.clone());
                                         }
                                     });
@@ -286,7 +297,88 @@ fn animator_graph_editor_system(
                                 defer_modify |= modify;
 
                                 ui.add_space(10.0);
-                                heading(ui, "Layers");
+                                ui.horizontal(|ui| {
+                                    heading(ui, "Layers");
+                                    let response = ui.selectable_label(false, "➕");
+                                    if response.clicked() {
+                                        let layers = &mut target.mutate().layers;
+                                        let layers_count = layers.len();
+                                        layers.push(Layer {
+                                            name: format!("Layer{}", layers_count),
+                                            ..Default::default()
+                                        });
+                                    }
+                                });
+
+                                enum LayerOp {
+                                    None,
+                                    MoveUp(usize),
+                                    MoveDown(usize),
+                                    Remove(usize),
+                                }
+                                let mut layer_op = LayerOp::None;
+                                let layers = &mut target.mutate_without_modify().layers;
+                                let layers_count = layers.len();
+                                for (layer_index, layer) in layers.iter_mut().enumerate() {
+                                    ui.horizontal(|ui| {
+                                        let x = ui.available_width();
+                                        if label_editable(
+                                            ui,
+                                            id.with(layer_index),
+                                            &layer.name,
+                                            temp_buffer,
+                                        ) {
+                                            modify = true;
+                                            layer.name.clone_from(temp_buffer);
+                                        }
+
+                                        ui.add_space((100.0 - x + ui.available_width()).max(0.0));
+
+                                        ui.add(
+                                            DragValue::new(&mut layer.default_weight)
+                                                .speed(0.01)
+                                                .max_decimals(3),
+                                        );
+
+                                        ui.checkbox(&mut layer.additive, String::default());
+
+                                        if layers_count > 1 {
+                                            if ui.selectable_label(false, "✖").clicked() {
+                                                layer_op = LayerOp::Remove(layer_index);
+                                            }
+                                        }
+
+                                        if layer_index < (layers_count - 1) {
+                                            if ui.selectable_label(false, "⬇").clicked() {
+                                                layer_op = LayerOp::MoveDown(layer_index);
+                                            }
+                                        }
+
+                                        if layer_index > 0 {
+                                            if ui.selectable_label(false, "⬆").clicked() {
+                                                layer_op = LayerOp::MoveUp(layer_index);
+                                            }
+                                        }
+                                    });
+                                }
+                                match layer_op {
+                                    LayerOp::None => {}
+                                    LayerOp::MoveUp(layer_index) => {
+                                        target.mutate().layers.swap(layer_index - 1, layer_index);
+                                    }
+                                    LayerOp::MoveDown(layer_index) => {
+                                        target.mutate().layers.swap(layer_index, layer_index + 1);
+                                    }
+                                    LayerOp::Remove(layer_index) => {
+                                        target.mutate().layers.remove(layer_index);
+                                        if layer_index == *selected_layer {
+                                            if layer_index > 0 {
+                                                *selected_layer -= 1;
+                                            }
+                                        }
+                                    }
+                                }
+                                defer_modify |= modify;
                             }
                         });
 
@@ -613,14 +705,14 @@ fn field<T>(ui: &mut Ui, label: impl Into<Label>, add_contents: impl FnOnce(&mut
     .inner
 }
 
-// fn right_to_left<T>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> T) -> T {
-//     ui.allocate_ui_with_layout(
-//         vec2(ui.available_width(), 0.0),
-//         Layout::right_to_left(),
-//         add_contents,
-//     )
-//     .inner
-// }
+fn right_to_left<T>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> T) -> T {
+    ui.allocate_ui_with_layout(
+        vec2(ui.available_width(), 0.0),
+        Layout::right_to_left(),
+        add_contents,
+    )
+    .inner
+}
 
 #[inline]
 fn label_editable(ui: &mut Ui, id: impl Into<Id>, text: &String, temp_buffer: &mut String) -> bool {
@@ -642,7 +734,6 @@ fn label_editable(ui: &mut Ui, id: impl Into<Id>, text: &String, temp_buffer: &m
             .double_clicked()
         {
             ui.memory().open_popup(id);
-            temp_buffer.clear();
             temp_buffer.clone_from(text);
         }
         false
