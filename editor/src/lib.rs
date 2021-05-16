@@ -1,4 +1,4 @@
-use std::f32::EPSILON;
+use std::{f32::EPSILON, string::ToString};
 
 use bevy::{
     asset::{Asset, HandleId},
@@ -7,13 +7,12 @@ use bevy::{
 };
 use bevy_animagraph::{
     petgraph::{visit::EdgeRef, EdgeDirection::Outgoing},
-    Animagraph, Layer, State, Transition,
+    Animagraph, Layer, Param, State, Transition,
 };
 use bevy_egui::{
     egui::{
-        self, emath::NumExt, pos2, vec2, Align, Button, Color32, Key, Label, Layout, PointerButton,
-        Pos2, Rect, Response, Sense, Stroke, TextEdit, TextStyle, Ui, Vec2, Widget, WidgetInfo,
-        WidgetType,
+        self, pos2, vec2, Color32, DragValue, Id, Key, Label, Layout, Pos2, Rect, Response, Sense,
+        Stroke, TextEdit, TextStyle, Ui, Vec2, WidgetInfo, WidgetType,
     },
     EguiContext,
 };
@@ -26,10 +25,10 @@ enum Selected {
     Transition(u32),
 }
 
-#[derive(Debug, PartialEq, Eq, Copy, Clone)]
-enum EditorOperation {
+#[derive(Debug, Clone)]
+enum EditOp {
     None,
-    AddingTransition { state: u32, position: Pos2 },
+    AddTransition { state: u32, position: Pos2 },
 }
 
 struct TransitionGroup {
@@ -56,11 +55,12 @@ pub struct AnimagraphEditor {
     pub open: bool,
     pub editing: Option<Handle<Animagraph>>,
     pub live: Option<Entity>,
-    operation: EditorOperation,
+    operation: EditOp,
     position: Vec2,
     selected: Option<Selected>,
     selected_layer: usize,
     context_menu_position: Pos2,
+    temp_buffer: String,
     cache: Cache,
 }
 
@@ -81,6 +81,8 @@ fn animator_graph_editor_system(
         selected,
         selected_layer,
         context_menu_position,
+        temp_buffer,
+
         cache,
     } = &mut *graph_editor;
 
@@ -119,6 +121,8 @@ fn animator_graph_editor_system(
                             });
                         }
                     } else {
+                        let mut defer_modify = false;
+
                         // Tool bar
                         const TOOLBAR_HEIGHT: f32 = 25.0;
                         let mut toolbar_rect = rect;
@@ -166,6 +170,7 @@ fn animator_graph_editor_system(
                         // rect.min.x += INSPECTOR_WIDTH;
                         inspector_rect.min.x = inspector_rect.max.x - INSPECTOR_WIDTH;
                         rect.max.x -= INSPECTOR_WIDTH + 6.0;
+
                         ui.allocate_ui_at_rect(inspector_rect, |ui: &mut Ui| match selected {
                             Some(Selected::State(state)) => {
                                 if let Some(state) = target.mutate_without_modify().layers
@@ -195,8 +200,90 @@ fn animator_graph_editor_system(
                                         &mut target.mutate_without_modify().name,
                                     );
                                 });
+
                                 ui.add_space(10.0);
-                                heading(ui, "Parameters");
+
+                                ui.horizontal(|ui| {
+                                    heading(ui, "Parameters");
+
+                                    let param_menu_id = id.with("param_menu");
+                                    let mut response =
+                                        ui.add(Label::new("➕").sense(Sense::click()));
+                                    if response.clicked() {
+                                        ui.memory().toggle_popup(param_menu_id);
+                                    }
+                                    response.rect.max.x = response.rect.min.x + 80.0;
+                                    egui::popup::popup_below_widget(
+                                        ui,
+                                        param_menu_id,
+                                        &response,
+                                        |ui| {
+                                            if ui.selectable_label(false, "Float").clicked() {
+                                                let params = &mut target.mutate().parameters;
+                                                let name = format!("Param{}", params.len());
+                                                params.insert(name, Param::Float(0.0));
+                                            }
+                                            if ui.selectable_label(false, "Bool").clicked() {
+                                                let params = &mut target.mutate().parameters;
+                                                let name = format!("Param{}", params.len());
+                                                params.insert(name, Param::Bool(false));
+                                            }
+                                        },
+                                    );
+                                });
+
+                                enum ParamOp {
+                                    None,
+                                    Rename(String),
+                                    Remove(String),
+                                }
+                                let mut modify = false;
+                                let mut param_op = ParamOp::None;
+                                let parameters = &mut target.mutate_without_modify().parameters;
+                                for (i, (name, param)) in parameters.iter_mut().enumerate() {
+                                    ui.horizontal(|ui| {
+                                        let x = ui.available_width();
+
+                                        if label_editable(ui, id.with(i), name, temp_buffer) {
+                                            param_op = ParamOp::Rename(name.clone());
+                                        }
+                                        ui.add_space((100.0 - x + ui.available_width()).max(0.0));
+
+                                        match param {
+                                            Param::Bool(v) => {
+                                                let v0 = *v;
+                                                ui.checkbox(v, String::default());
+                                                modify |= v0 != *v;
+                                            }
+                                            Param::Float(v) => {
+                                                let v0 = v.to_bits();
+                                                ui.add(
+                                                    DragValue::new(v).speed(0.01).max_decimals(3),
+                                                );
+                                                modify |= v0 != v.to_bits();
+                                            }
+                                        }
+
+                                        if ui.add(Label::new("✖").sense(Sense::click())).clicked()
+                                        {
+                                            param_op = ParamOp::Remove(name.clone());
+                                        }
+                                    });
+                                }
+                                match param_op {
+                                    ParamOp::None => {}
+                                    ParamOp::Rename(name) => {
+                                        let params = &mut target.mutate().parameters;
+                                        if let Some(v) = params.remove(&name) {
+                                            params.insert(temp_buffer.clone(), v);
+                                        }
+                                    }
+                                    ParamOp::Remove(name) => {
+                                        target.mutate().parameters.remove(&name);
+                                    }
+                                }
+                                defer_modify |= modify;
+
                                 ui.add_space(10.0);
                                 heading(ui, "Layers");
                             }
@@ -205,7 +292,6 @@ fn animator_graph_editor_system(
                         let state_menu_id = id.with("state_menu");
                         let layer_menu_id = id.with("layer_menu");
 
-                        let mut modify = false;
                         let graph =
                             &mut target.mutate_without_modify().layers[*selected_layer].graph;
 
@@ -273,7 +359,7 @@ fn animator_graph_editor_system(
                         }
 
                         // Draw adding transition helper
-                        if let EditorOperation::AddingTransition { state, position } = operation {
+                        if let EditOp::AddTransition { state, position } = operation {
                             if let Some(state) = graph.node_weight_mut((*state).into()) {
                                 let p0 = state_pos(state) + position_offset;
                                 ui.painter().line_segment(
@@ -285,7 +371,7 @@ fn animator_graph_editor_system(
                                 );
                             } else {
                                 // Exit
-                                *operation = EditorOperation::None;
+                                *operation = EditOp::None;
                             }
                         }
 
@@ -313,14 +399,14 @@ fn animator_graph_editor_system(
 
                             if response.clicked() {
                                 match operation {
-                                    EditorOperation::AddingTransition { state, .. } => {
-                                        modify = true;
+                                    EditOp::AddTransition { state, .. } => {
+                                        defer_modify = true;
                                         graph.add_edge(
                                             (*state).into(),
                                             index.into(),
                                             Transition::default(),
                                         );
-                                        *operation = EditorOperation::None;
+                                        *operation = EditOp::None;
                                     }
                                     _ => {}
                                 }
@@ -349,9 +435,6 @@ fn animator_graph_editor_system(
                             }
                         }
                         std::mem::drop(graph);
-                        if modify {
-                            target.mutate();
-                        }
 
                         let mut response = ui.interact(rect, id, egui::Sense::click_and_drag());
                         if response.dragged_by(egui::PointerButton::Middle) {
@@ -404,10 +487,7 @@ fn animator_graph_editor_system(
                                     let response = ui.selectable_label(false, "Create Transition");
                                     if response.clicked() {
                                         if let Some(position) = response.interact_pointer_pos() {
-                                            *operation = EditorOperation::AddingTransition {
-                                                state,
-                                                position,
-                                            };
+                                            *operation = EditOp::AddTransition { state, position };
                                         }
                                     }
 
@@ -444,12 +524,12 @@ fn animator_graph_editor_system(
 
                                 // Update operation
                                 match operation {
-                                    EditorOperation::AddingTransition { position, .. } => {
+                                    EditOp::AddTransition { position, .. } => {
                                         if let Some(p) = response.hover_pos() {
                                             *position = p;
                                         }
                                         if ui.input().key_pressed(Key::Escape) {
-                                            *operation = EditorOperation::None;
+                                            *operation = EditOp::None;
                                         }
                                     }
                                     _ => {}
@@ -473,6 +553,11 @@ fn animator_graph_editor_system(
                                     *selected = None;
                                 }
                             }
+                        }
+
+                        // Force graph modification
+                        if defer_modify {
+                            target.mutate();
                         }
                     }
 
@@ -512,18 +597,55 @@ fn animator_graph_editor_system(
 }
 
 #[inline]
-fn heading(ui: &mut Ui, label: impl Into<String>) {
+fn heading(ui: &mut Ui, label: impl ToString) {
     ui.add(Label::new(label).text_style(TextStyle::Button));
 }
 
 #[inline]
-fn field(ui: &mut Ui, label: impl Into<Label>, add_contents: impl FnOnce(&mut Ui)) {
+fn field<T>(ui: &mut Ui, label: impl Into<Label>, add_contents: impl FnOnce(&mut Ui) -> T) -> T {
     ui.horizontal(|ui| {
         let x = ui.available_width();
         ui.label(label);
         ui.add_space((100.0 - x + ui.available_width()).max(0.0));
-        (add_contents)(ui);
-    });
+        (add_contents)(ui)
+    })
+    .inner
+}
+
+// fn right_to_left<T>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> T) -> T {
+//     ui.allocate_ui_with_layout(
+//         vec2(ui.available_width(), 0.0),
+//         Layout::right_to_left(),
+//         add_contents,
+//     )
+//     .inner
+// }
+
+#[inline]
+fn label_editable(ui: &mut Ui, id: impl Into<Id>, text: &String, temp_buffer: &mut String) -> bool {
+    let id = id.into();
+    if ui.memory().is_popup_open(id) {
+        let response = ui.add(TextEdit::singleline(temp_buffer).desired_width(80.0));
+        if response.lost_focus()
+            || response.clicked_elsewhere()
+            || ui.input().key_pressed(Key::Escape)
+        {
+            ui.memory().close_popup();
+            temp_buffer != text
+        } else {
+            false
+        }
+    } else {
+        if ui
+            .add(Label::new(text).sense(Sense::click()))
+            .double_clicked()
+        {
+            ui.memory().open_popup(id);
+            temp_buffer.clear();
+            temp_buffer.clone_from(text);
+        }
+        false
+    }
 }
 
 #[inline]
@@ -730,7 +852,7 @@ fn action_needed(
     ui: &mut Ui,
     rect: Rect,
     message: impl Into<Label>,
-    action_label: impl Into<String>,
+    action_label: impl ToString,
 ) -> Response {
     // No graph is selected for editing
     let mut rect = rect;
@@ -817,11 +939,12 @@ impl Plugin for AnimatorControllerEditorPlugin {
             open: true,
             editing: None,
             live: None,
-            operation: EditorOperation::None,
+            operation: EditOp::None,
             position: Vec2::ZERO,
             selected: None,
             selected_layer: 0,
             context_menu_position: Pos2::ZERO,
+            temp_buffer: String::default(),
             cache: Cache::default(),
         })
         .add_system_to_stage(CoreStage::PostUpdate, animator_graph_editor_system.system());
