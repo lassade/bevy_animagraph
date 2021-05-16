@@ -88,6 +88,10 @@ fn animator_graph_editor_system(
         cache.target = editing.clone();
     }
 
+    // Store graphs pointer for later
+    let graphs_ptr = &*graphs as *const _ as *mut Assets<Animagraph>;
+    let mut create_graph = false;
+
     egui::Window::new("Animagraph Editor")
         .default_size([1100.0, 600.0])
         .open(open)
@@ -119,12 +123,21 @@ fn animator_graph_editor_system(
                         rect.min.y += TOOLBAR_HEIGHT;
                         ui.allocate_ui_at_rect(toolbar_rect, |ui: &mut Ui| {
                             ui.horizontal(|ui| {
-                                ui.label("Name");
-                                ui.add(
-                                    TextEdit::singleline(&mut target.mutate_without_modify().name)
-                                        .text_style(TextStyle::Button)
-                                        .desired_width(200.0),
-                                );
+                                ui.label("Graph");
+                                egui::ComboBox::from_id_source("graph_select")
+                                    .selected_text(&target.view().name)
+                                    .show_ui(ui, |ui| {
+                                        // SAFETY: We only want to display all the graphs available for editing
+                                        let graphs = unsafe { &*graphs_ptr };
+                                        for (other_handle, other) in graphs.iter() {
+                                            if ui.selectable_label(false, &other.name).clicked() {
+                                                *editing = Some(Handle::weak(other_handle));
+                                            }
+                                        }
+                                        if ui.selectable_label(false, "*Create New").clicked() {
+                                            create_graph = true;
+                                        }
+                                    });
 
                                 // Select active layer
                                 ui.label("Layer");
@@ -169,6 +182,13 @@ fn animator_graph_editor_system(
                                 heading(ui, "Others");
                             }
                             None => {
+                                heading(ui, "Graph");
+                                field(ui, "Name", |ui| {
+                                    ui.text_edit_singleline(
+                                        &mut target.mutate_without_modify().name,
+                                    );
+                                });
+                                ui.add_space(10.0);
                                 heading(ui, "Parameters");
                                 ui.add_space(10.0);
                                 heading(ui, "Layers");
@@ -469,10 +489,19 @@ fn animator_graph_editor_system(
                     "Create Graph",
                 );
                 if response.clicked() {
-                    *editing = Some(graphs.add(Animagraph::default()));
+                    create_graph = true;
                 }
             }
         });
+
+    // Create a new graph and select it
+    if create_graph {
+        let name = format!("Graph{}", graphs.len());
+        *editing = Some(graphs.add(Animagraph {
+            name,
+            ..Default::default()
+        }));
+    }
 }
 
 #[inline]
