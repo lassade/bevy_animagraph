@@ -240,11 +240,12 @@ fn animator_graph_editor_system(
                                 let mut modify = false;
                                 let mut param_op = ParamOp::None;
                                 let parameters = &mut target.mutate_without_modify().parameters;
-                                for (i, (name, param)) in parameters.iter_mut().enumerate() {
+                                for (param_id, name, param) in parameters.iter_mut() {
                                     ui.horizontal(|ui| {
                                         let x = ui.available_width();
 
-                                        if label_editable(ui, id.with(i), name, temp_buffer) {
+                                        if label_editable(ui, id.with(param_id), name, temp_buffer)
+                                        {
                                             param_op = ParamOp::Rename(name.clone());
                                         }
                                         ui.add_space((100.0 - x + ui.available_width()).max(0.0));
@@ -273,13 +274,13 @@ fn animator_graph_editor_system(
                                 match param_op {
                                     ParamOp::None => {}
                                     ParamOp::Rename(name) => {
-                                        let params = &mut target.mutate().parameters;
-                                        if let Some(v) = params.remove(&name) {
-                                            params.insert(temp_buffer.clone(), v);
-                                        }
+                                        target
+                                            .mutate()
+                                            .parameters
+                                            .rename_by_name(&name, temp_buffer.clone());
                                     }
                                     ParamOp::Remove(name) => {
-                                        target.mutate().parameters.remove(&name);
+                                        target.mutate().parameters.remove_by_name(&name);
                                     }
                                 }
                                 defer_modify |= modify;

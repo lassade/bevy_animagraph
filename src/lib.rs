@@ -1,6 +1,7 @@
+pub extern crate indexmap;
 pub extern crate petgraph;
 
-use std::f32::EPSILON;
+use std::{f32::EPSILON, iter::Iterator};
 
 use bevy::{
     animation::{AnimationStage, AnimationSystem, Animator, Clip},
@@ -14,9 +15,13 @@ use bevy::{
     },
     math::Vec2,
     reflect::{Reflect, TypeUuid},
-    utils::{HashMap, HashSet},
+    utils::HashSet,
 };
+use indexmap::map::MutableKeys;
 use petgraph::{visit::EdgeRef, EdgeDirection::Outgoing, Graph};
+use rand::{thread_rng, Rng};
+
+pub type IndexMap<K, V> = indexmap::IndexMap<K, V, ahash::RandomState>;
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -24,55 +29,25 @@ use petgraph::{visit::EdgeRef, EdgeDirection::Outgoing, Graph};
 #[derive(Debug, Clone)]
 pub enum Var<T> {
     Value(T),
-    Param(String),
+    Param(ParamId),
 }
 
 impl Var<f32> {
     #[inline]
-    pub fn get(&self, params: &HashMap<String, Param>) -> Option<f32> {
+    pub fn get(&self, params: &Parameters) -> Option<f32> {
         match self {
             Var::Value(value) => Some(*value),
-            Var::Param(name) => params.get(name).map(|param| param.as_float()).flatten(),
-        }
-    }
-
-    #[inline]
-    pub fn get_or_insert_default(&self, params: &mut HashMap<String, Param>) -> Option<f32> {
-        match self {
-            Var::Value(value) => Some(*value),
-            Var::Param(name) => {
-                if let Some(param) = params.get(name) {
-                    param.as_float()
-                } else {
-                    params.insert(name.clone(), Param::Float(0.0));
-                    Some(0.0)
-                }
-            }
+            Var::Param(id) => params.get_by_id(*id).map(Param::as_float).flatten(),
         }
     }
 }
 
 impl Var<bool> {
     #[inline]
-    pub fn get(&self, params: &HashMap<String, Param>) -> Option<bool> {
+    pub fn get(&self, params: &Parameters) -> Option<bool> {
         match self {
             Var::Value(value) => Some(*value),
-            Var::Param(name) => params.get(name).map(|param| param.as_bool()).flatten(),
-        }
-    }
-
-    #[inline]
-    pub fn get_or_insert_default(&self, params: &mut HashMap<String, Param>) -> Option<bool> {
-        match self {
-            Var::Value(value) => Some(*value),
-            Var::Param(name) => {
-                if let Some(param) = params.get(name) {
-                    param.as_bool()
-                } else {
-                    params.insert(name.clone(), Param::Bool(false));
-                    Some(false)
-                }
-            }
+            Var::Param(id) => params.get_by_id(*id).map(Param::as_bool).flatten(),
         }
     }
 }
@@ -106,13 +81,100 @@ impl Param {
     }
 }
 
+#[derive(Debug, Hash, PartialEq, Eq, Copy, Clone)]
+pub struct ParamId(usize);
+
+#[derive(Default, Debug, Clone)]
+pub struct Parameters {
+    map: IndexMap<String, Param>,
+    ids: Vec<usize>,
+}
+
+impl Parameters {
+    #[inline]
+    pub fn get_by_name(&self, name: &str) -> Option<Param> {
+        self.map.get(name).copied()
+    }
+
+    pub fn find_id(&self, name: &str) -> Option<ParamId> {
+        self.map
+            .get_full(name)
+            .map(|(i, _, _)| ParamId(self.ids[i]))
+    }
+
+    pub fn get_by_id(&self, id: ParamId) -> Option<&Param> {
+        self.ids
+            .iter()
+            .position(|other| *other == id.0)
+            .and_then(|i| self.map.get_index(i))
+            .map(|(_, p)| p)
+    }
+
+    pub fn remove_by_name(&mut self, name: &str) -> Option<Param> {
+        if let Some((i, _, param)) = self.map.swap_remove_full(name) {
+            self.ids.swap_remove(i);
+            Some(param)
+        } else {
+            None
+        }
+    }
+
+    // pub fn remove_by_index(&mut self, index: usize) -> Option<Param> {
+    //     self.map.swap_remove_full(key)
+    // }
+
+    // pub fn remove_by_id(&mut self, id: usize) -> Option<Param> {
+    //     todo!()
+    // }
+
+    pub fn rename_by_name(&mut self, name: &str, target: String) {
+        if let Some((_, name, _)) = self.map.get_full_mut2(name) {
+            *name = target;
+        }
+    }
+
+    pub fn insert(&mut self, name: String, param: Param) -> ParamId {
+        let (i, _) = self.map.insert_full(name, param);
+        if i < self.ids.len() {
+            ParamId(self.ids[i])
+        } else {
+            // Create a new stable index
+            let mut rng = thread_rng();
+            loop {
+                let id: usize = rng.gen();
+                if !self.ids.iter().any(|other| *other == id) {
+                    self.ids.push(id);
+                    return ParamId(id);
+                }
+            }
+        }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = (ParamId, &String, &mut Param)> {
+        let ids_ptr = &self.ids as *const _;
+        self.map
+            .iter_mut()
+            .enumerate()
+            .map(move |(i, (name, param))| {
+                // TODO: Borrow won't let me use `self.ids` not sure why
+                let ids: &Vec<usize> = unsafe { &*ids_ptr };
+                (ParamId(ids[i]), name, param)
+            })
+    }
+}
+
 ///////////////////////////////////////////////////////////////////////////////
 
 #[derive(Debug, TypeUuid)]
 #[uuid = "6b7c940d-a698-40ae-9ff2-b08747d6e8e1"]
 pub struct Animagraph {
     pub name: String,
-    pub parameters: HashMap<String, Param>,
+    pub parameters: Parameters,
     pub layers: Vec<Layer>,
 }
 
@@ -120,7 +182,7 @@ impl Default for Animagraph {
     fn default() -> Self {
         Animagraph {
             name: String::default(),
-            parameters: HashMap::default(),
+            parameters: Parameters::default(),
             layers: vec![Layer {
                 name: "Layer0".to_string(),
                 ..Default::default()
@@ -132,10 +194,6 @@ impl Default for Animagraph {
 #[derive(Debug)]
 pub struct Layer {
     pub name: String,
-    /// Layer default weight
-    ///
-    /// **NOTE**: The layer runtime weight will be evaluated from a the parameter with the same name as the layer,
-    /// this parameter will be added automatically if not present;
     pub default_weight: f32,
     pub additive: bool,
     pub graph: Graph<State, Transition>,
@@ -274,10 +332,21 @@ pub enum Compare {
 
 #[derive(Debug, Clone)]
 pub enum Condition {
-    Bool { x: String, y: Var<bool> },
-    Float { x: String, op: Compare, y: Var<f32> },
-    ExitTime { time: f32 },
-    ExitTimeNormalized { normalized_time: f32 },
+    Bool {
+        x: ParamId,
+        y: Var<bool>,
+    },
+    Float {
+        x: ParamId,
+        op: Compare,
+        y: Var<f32>,
+    },
+    ExitTime {
+        time: f32,
+    },
+    ExitTimeNormalized {
+        normalized_time: f32,
+    },
 }
 
 #[derive(Default, Debug, Clone)]
@@ -343,7 +412,7 @@ impl LayerInfo {
 #[derive(Debug)]
 pub struct GraphInfo {
     layers: Vec<LayerInfo>,
-    params: HashMap<String, Param>,
+    params: Parameters,
 }
 
 impl GraphInfo {
@@ -351,15 +420,25 @@ impl GraphInfo {
         &self.layers[..]
     }
 
-    pub fn params(&self) -> &HashMap<String, Param> {
+    pub fn params(&self) -> &Parameters {
         &self.params
     }
 
-    pub fn set_param<S>(&mut self, name: &str, param: Param) {
-        match self.params.get_mut(name) {
+    pub fn set_param_by_name<S>(&mut self, name: &str, param: Param) {
+        match self.params.map.get_mut(name) {
             Some(Param::Float(v)) => *v = param.as_float().unwrap_or(0.0),
             Some(Param::Bool(v)) => *v = param.as_bool().unwrap_or(false),
             _ => {}
+        }
+    }
+
+    pub fn set_param_by_id<S>(&mut self, id: usize, param: Param) {
+        if let Some(index) = self.params.ids.iter().position(|other| *other == id) {
+            match self.params.map.get_index_mut(index) {
+                Some((_, Param::Float(v))) => *v = param.as_float().unwrap_or(0.0),
+                Some((_, Param::Bool(v))) => *v = param.as_bool().unwrap_or(false),
+                _ => {}
+            }
         }
     }
 }
@@ -439,7 +518,7 @@ pub(crate) fn animator_controller_system(
             // Get or create the runtime
             let runtime = controller.runtime.get_or_insert_with(|| {
                 // Default parameters
-                let mut parameters = graph.parameters.clone();
+                let parameters = graph.parameters.clone();
 
                 // Create layers
                 let layers = graph
@@ -448,11 +527,7 @@ pub(crate) fn animator_controller_system(
                     .map(|layer| LayerInfo {
                         current_state: StateInfo::default(),
                         transition: None,
-                        weight: parameters
-                            .entry(layer.name.clone())
-                            .or_insert_with(|| Param::Float(layer.default_weight))
-                            .as_float()
-                            .unwrap_or(layer.default_weight),
+                        weight: layer.default_weight,
                     })
                     .collect();
 
@@ -477,11 +552,7 @@ pub(crate) fn animator_controller_system(
                 update_transition(parameters, layer, layer_info, delta_time);
 
                 // Process states
-                let layer_weight = parameters
-                    .get(&layer.name)
-                    .map(Param::as_float)
-                    .flatten()
-                    .unwrap_or(layer.default_weight);
+                let layer_weight = layer_info.weight;
                 let mut weight = 1.0;
 
                 if let Some(transition_info) = &layer_info.transition {
@@ -529,7 +600,7 @@ pub(crate) fn animator_controller_system(
 }
 
 fn update_transition(
-    parameters: &HashMap<String, Param>,
+    parameters: &Parameters,
     layer: &Layer,
     layer_info: &mut LayerInfo,
     delta_time: f32,
@@ -568,12 +639,15 @@ fn update_transition(
                 .iter()
                 .all(|condition| match condition {
                     Condition::Bool { x, y } => {
-                        let x = parameters.get(x).and_then(Param::as_bool);
+                        let x = parameters.get_by_id(*x).and_then(Param::as_bool);
                         let y = y.get(parameters);
                         x == y
                     }
                     Condition::Float { x, op, y } => {
-                        let x = parameters.get(x).and_then(Param::as_float).unwrap_or(0.0);
+                        let x = parameters
+                            .get_by_id(*x)
+                            .and_then(Param::as_float)
+                            .unwrap_or(0.0);
                         let y = y.get(parameters).unwrap_or(0.0);
                         match op {
                             Compare::Equal => (x - y).abs() < EPSILON,
@@ -624,7 +698,7 @@ fn update_transition(
 fn update_state(
     animator: &mut Animator,
     clips: &Assets<Clip>,
-    parameters: &HashMap<String, Param>,
+    parameters: &Parameters,
     state: &State,
     state_info: &mut StateInfo,
     delta_time: f32,
