@@ -132,7 +132,11 @@ impl Default for Animagraph {
 #[derive(Debug)]
 pub struct Layer {
     pub name: String,
-    pub weight: Var<f32>,
+    /// Layer default weight
+    ///
+    /// **NOTE**: The layer runtime weight will be evaluated from a the parameter with the same name as the layer,
+    /// this parameter will be added automatically if not present;
+    pub default_weight: f32,
     pub additive: bool,
     pub graph: Graph<State, Transition>,
 }
@@ -141,7 +145,7 @@ impl Default for Layer {
     fn default() -> Self {
         Layer {
             name: String::default(),
-            weight: Var::Value(1.0),
+            default_weight: 1.0,
             additive: false,
             graph: Graph::new(),
         }
@@ -444,10 +448,11 @@ pub(crate) fn animator_controller_system(
                     .map(|layer| LayerInfo {
                         current_state: StateInfo::default(),
                         transition: None,
-                        weight: layer
-                            .weight
-                            .get_or_insert_default(&mut parameters)
-                            .unwrap_or(0.0),
+                        weight: parameters
+                            .entry(layer.name.clone())
+                            .or_insert_with(|| Param::Float(layer.default_weight))
+                            .as_float()
+                            .unwrap_or(layer.default_weight),
                     })
                     .collect();
 
@@ -472,7 +477,11 @@ pub(crate) fn animator_controller_system(
                 update_transition(parameters, layer, layer_info, delta_time);
 
                 // Process states
-                let layer_weight = layer.weight.get(parameters).unwrap_or(1.0);
+                let layer_weight = parameters
+                    .get(&layer.name)
+                    .map(Param::as_float)
+                    .flatten()
+                    .unwrap_or(layer.default_weight);
                 let mut weight = 1.0;
 
                 if let Some(transition_info) = &layer_info.transition {

@@ -100,6 +100,7 @@ fn animator_graph_editor_system(
             let (id, mut rect) = ui.allocate_space(ui.available_size());
 
             if let Some(graph_handle) = editing {
+                let graph_id = graph_handle.id;
                 if let Some(mut target) = Modify::new(&mut *graphs, &*graph_handle) {
                     let layer_count = target.view().layers.len();
                     if *selected_layer > layer_count {
@@ -129,11 +130,15 @@ fn animator_graph_editor_system(
                                     .show_ui(ui, |ui| {
                                         // SAFETY: We only want to display all the graphs available for editing
                                         let graphs = unsafe { &*graphs_ptr };
-                                        for (other_handle, other) in graphs.iter() {
-                                            if ui.selectable_label(false, &other.name).clicked() {
-                                                *editing = Some(Handle::weak(other_handle));
+                                        for (other_id, other) in graphs.iter() {
+                                            if ui
+                                                .selectable_label(other_id == graph_id, &other.name)
+                                                .clicked()
+                                            {
+                                                *editing = Some(Handle::weak(other_id));
                                             }
                                         }
+                                        // ? NOTE: Graphs with no strong references will be disposed in the next few frames
                                         if ui.selectable_label(false, "*Create New").clicked() {
                                             create_graph = true;
                                         }
