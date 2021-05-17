@@ -20,35 +20,82 @@ use bevy::{
 use indexmap::map::MutableKeys;
 use petgraph::{visit::EdgeRef, EdgeDirection::Outgoing, Graph};
 use rand::{thread_rng, Rng};
+use smallvec::{smallvec, SmallVec};
 
 pub type IndexMap<K, V> = indexmap::IndexMap<K, V, ahash::RandomState>;
 
+type IndexSet<K> = indexmap::IndexSet<K, ahash::RandomState>;
+
 ///////////////////////////////////////////////////////////////////////////////
 
-/// [`AnimatorGraph`] variable, that can be a parameter a fixed value
-#[derive(Debug, Clone)]
-pub enum Var<T> {
-    Value(T),
-    Param(ParamId),
+#[derive(Debug, Clone, Copy)]
+pub enum VarType {
+    Bool,
+    Float,
 }
 
-impl Var<f32> {
-    #[inline]
-    pub fn get(&self, params: &Parameters) -> Option<f32> {
-        match self {
-            Var::Value(value) => Some(*value),
-            Var::Param(id) => params.get_by_id(*id).and_then(|(_, p)| p.as_float()),
+/// [`AnimatorGraph`] variable, that can be a parameter a fixed value
+///
+/// **NOTE** It's important to preserve the values to improve the editor experience
+#[derive(Default, Debug, Clone)]
+pub struct Var<T: Default> {
+    pub use_param: bool,
+    pub value: T,
+    pub param: ParamId,
+}
+
+impl<T: Default> Var<T> {
+    pub fn from_value(value: T) -> Self {
+        Self {
+            use_param: false,
+            value,
+            param: ParamId::default(),
+        }
+    }
+
+    pub fn from_param(param: ParamId) -> Self {
+        Self {
+            use_param: false,
+            value: Default::default(),
+            param,
         }
     }
 }
 
-impl Var<bool> {
+pub trait VarTrait<T> {
+    fn get(&self, params: &Parameters) -> Option<T>;
+    fn var_type() -> VarType;
+}
+
+impl VarTrait<f32> for Var<f32> {
     #[inline]
-    pub fn get(&self, params: &Parameters) -> Option<bool> {
-        match self {
-            Var::Value(value) => Some(*value),
-            Var::Param(id) => params.get_by_id(*id).and_then(|(_, p)| p.as_bool()),
+    fn get(&self, params: &Parameters) -> Option<f32> {
+        if self.use_param {
+            params.get_by_id(self.param).and_then(|(_, p)| p.as_float())
+        } else {
+            Some(self.value)
         }
+    }
+
+    #[inline]
+    fn var_type() -> VarType {
+        VarType::Float
+    }
+}
+
+impl VarTrait<bool> for Var<bool> {
+    #[inline]
+    fn get(&self, params: &Parameters) -> Option<bool> {
+        if self.use_param {
+            params.get_by_id(self.param).and_then(|(_, p)| p.as_bool())
+        } else {
+            Some(self.value)
+        }
+    }
+
+    #[inline]
+    fn var_type() -> VarType {
+        VarType::Bool
     }
 }
 
@@ -184,6 +231,30 @@ impl Parameters {
 
 ///////////////////////////////////////////////////////////////////////////////
 
+/// Stable indexes lookup table helper to reuse animator layers
+#[derive(Default, Debug, Clone)]
+struct Ids(IndexSet<usize>);
+
+impl Ids {
+    #[inline]
+    pub fn find_index(&mut self, id: usize) -> Option<usize> {
+        self.0.get_full(&id).map(|(i, _)| i)
+    }
+
+    pub fn insert(&mut self) -> usize {
+        // Create a new stable index
+        let mut rng = thread_rng();
+        loop {
+            let id: usize = rng.gen();
+            if self.0.insert(id) {
+                return self.0.len() - 1;
+            }
+        }
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
 #[derive(Debug, TypeUuid)]
 #[uuid = "6b7c940d-a698-40ae-9ff2-b08747d6e8e1"]
 pub struct Animagraph {
@@ -274,6 +345,7 @@ pub struct State {
     pub position: Vec2,
     /// Normalized state start time
     pub offset: Var<f32>,
+    pub time_scale: Var<f32>,
     /// State data
     pub data: StateData,
 }
@@ -283,7 +355,8 @@ impl Default for State {
         State {
             name: String::default(),
             position: Vec2::ZERO,
-            offset: Var::Value(0.0),
+            offset: Var::from_value(0.0),
+            time_scale: Var::from_value(1.0),
             data: StateData::Marker,
         }
     }
@@ -295,7 +368,6 @@ pub enum StateData {
     Marker,
     Clip {
         clip: Handle<Clip>,
-        time_scale: Var<f32>,
     },
     // SubGraph {
     //     graph: Graph<State, Transition>,
@@ -371,10 +443,11 @@ pub struct Transition {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-#[derive(Default, Debug, Copy, Clone)]
+#[derive(Default, Debug, Clone)]
 pub struct StateInfo {
     state: u32,
     duration: f32,
+    owned: SmallVec<[usize; 6]>,
     pub loop_count: u32,
     pub normalized_time: f32,
 }
@@ -427,6 +500,7 @@ impl LayerInfo {
 pub struct GraphInfo {
     layers: Vec<LayerInfo>,
     params: Parameters,
+    ids: Ids,
 }
 
 impl GraphInfo {
@@ -532,7 +606,7 @@ pub(crate) fn animator_controller_system(
             // Get or create the runtime
             let runtime = controller.runtime.get_or_insert_with(|| {
                 // Default parameters
-                let parameters = graph.parameters.clone();
+                let params = graph.parameters.clone();
 
                 // Create layers
                 let layers = graph
@@ -547,23 +621,23 @@ pub(crate) fn animator_controller_system(
 
                 GraphInfo {
                     layers,
-                    params: parameters,
+                    params,
+                    ids: Ids::default(),
                 }
             });
-
-            // Clear previous frame layers
-            animator.layers.clear();
 
             // Needed for the borrow checker
             let layers = &mut runtime.layers;
             let parameters = &mut runtime.params;
+            let ids = &mut runtime.ids;
+            let mut stack_index = 0;
 
             // Execute
             for (layer_index, layer_info) in layers.iter_mut().enumerate() {
                 let layer = &graph.layers[layer_index];
 
                 // Process transitions
-                update_transition(parameters, layer, layer_info, delta_time);
+                update_transition(animator, ids, parameters, layer, layer_info, delta_time);
 
                 // Process states
                 let layer_weight = layer_info.weight;
@@ -579,6 +653,8 @@ pub(crate) fn animator_controller_system(
                     {
                         update_state(
                             animator,
+                            ids,
+                            &mut stack_index,
                             clips,
                             parameters,
                             &state_node.weight,
@@ -599,6 +675,8 @@ pub(crate) fn animator_controller_system(
                 {
                     update_state(
                         animator,
+                        ids,
+                        &mut stack_index,
                         clips,
                         parameters,
                         &state_node.weight,
@@ -614,6 +692,8 @@ pub(crate) fn animator_controller_system(
 }
 
 fn update_transition(
+    animator: &mut Animator,
+    ids: &mut Ids,
     parameters: &Parameters,
     layer: &Layer,
     layer_info: &mut LayerInfo,
@@ -627,19 +707,27 @@ fn update_transition(
         {
             transition_info.normalized_time += delta_time / transition_edge.weight.length;
 
+            // TODO: Other interrupt sources
             if transition_info.normalized_time > 1.0 {
                 // Transition is done
-                layer_info.current_state = transition_info.to;
+
+                // Remove animator layers
+                let current_state = &mut layer_info.current_state;
+                for i in (0..current_state.owned.len()).rev() {
+                    remove_animator_layer(animator, ids, &mut current_state.owned, i);
+                }
+
+                // Copy state info
+                *current_state = transition_info.to.clone();
+
+                // Clear transition
+                layer_info.transition = None;
             } else {
                 // Transition still in progress
-                // TODO: Interrupt sources
                 return;
             }
         }
     }
-
-    // Clear transition
-    layer_info.transition = None;
 
     // Check for transitions in the current state
     if let Some(transition_edge) = layer
@@ -693,6 +781,7 @@ fn update_transition(
                 to: StateInfo {
                     state: state_index as u32,
                     duration: 0.0,
+                    owned: smallvec![],
                     loop_count: 0,
                     normalized_time: state_node
                         .weight
@@ -709,8 +798,53 @@ fn update_transition(
     }
 }
 
+fn push_animator_layer<'a>(
+    animator: &'a mut Animator,
+    ids: &mut Ids,
+    stack_index: &mut usize,
+    owned: &mut SmallVec<[usize; 6]>,
+    owned_index: &mut usize,
+) -> &'a mut bevy::animation::Layer {
+    // Find where the layer is at
+    let b = if let Some(id) = owned.get(*owned_index) {
+        ids.find_index(*id).unwrap()
+    } else {
+        // Layer not found, allocate a new one
+        let id = ids.insert();
+        owned.push(id);
+
+        let index = animator.layers.len();
+        let layer = bevy::animation::Layer::default();
+        animator.layers.push(layer);
+        index
+    };
+    *owned_index += 1;
+
+    // Put layer in the right order
+    let a = *stack_index;
+    animator.layers.swap(a, b);
+    ids.0.swap_indices(a, b);
+    *stack_index += 1;
+
+    &mut animator.layers[a]
+}
+
+fn remove_animator_layer<'a>(
+    animator: &'a mut Animator,
+    ids: &mut Ids,
+    owned: &mut SmallVec<[usize; 6]>,
+    owned_index: usize,
+) {
+    // Find where the layer is at
+    let id = owned.remove(owned_index);
+    let (index, _) = ids.0.swap_remove_full(&id).unwrap();
+    animator.layers.swap_remove(index);
+}
+
 fn update_state(
     animator: &mut Animator,
+    ids: &mut Ids,
+    stack_index: &mut usize,
     clips: &Assets<Clip>,
     parameters: &Parameters,
     state: &State,
@@ -719,12 +853,13 @@ fn update_state(
     weight: f32,
     additive: bool,
 ) {
+    let time_scale = state.time_scale.get(parameters).unwrap_or(1.0);
+    let mut owned_index = 0;
     match &state.data {
         StateData::Marker => {}
-        StateData::Clip { clip, time_scale } => {
+        StateData::Clip { clip } => {
             let clip_handle = clip;
             if let Some(clip) = clips.get(clip) {
-                let time_scale = time_scale.get(parameters).unwrap_or(1.0);
                 let d = clip.duration();
 
                 let mut n = state_info.normalized_time;
@@ -742,13 +877,19 @@ fn update_state(
                 state_info.normalized_time = n;
 
                 // Add layer
-                let mut layer = bevy::animation::Layer::default();
+                let clip = animator.add_clip(clip_handle.clone()); // TODO: add_clip should take a ref to handle;
+                let layer = push_animator_layer(
+                    animator,
+                    ids,
+                    stack_index,
+                    &mut state_info.owned,
+                    &mut owned_index,
+                );
                 layer.weight = weight;
-                layer.clip = animator.add_clip(clip_handle.clone()); // TODO: add_clip should take a ref to handle
+                layer.clip = clip;
                 layer.time = n * d;
                 layer.time_scale = 0.0;
                 layer.additive = additive;
-                animator.layers.push(layer);
             }
         }
         StateData::Blend1D {
