@@ -37,7 +37,7 @@ impl Var<f32> {
     pub fn get(&self, params: &Parameters) -> Option<f32> {
         match self {
             Var::Value(value) => Some(*value),
-            Var::Param(id) => params.get_by_id(*id).map(Param::as_float).flatten(),
+            Var::Param(id) => params.get_by_id(*id).and_then(|(_, p)| p.as_float()),
         }
     }
 }
@@ -47,7 +47,7 @@ impl Var<bool> {
     pub fn get(&self, params: &Parameters) -> Option<bool> {
         match self {
             Var::Value(value) => Some(*value),
-            Var::Param(id) => params.get_by_id(*id).map(Param::as_bool).flatten(),
+            Var::Param(id) => params.get_by_id(*id).and_then(|(_, p)| p.as_bool()),
         }
     }
 }
@@ -84,6 +84,12 @@ impl Param {
 #[derive(Debug, Hash, PartialEq, Eq, Copy, Clone)]
 pub struct ParamId(usize);
 
+impl Default for ParamId {
+    fn default() -> Self {
+        Self(usize::MAX)
+    }
+}
+
 #[derive(Default, Debug, Clone)]
 pub struct Parameters {
     map: IndexMap<String, Param>,
@@ -102,12 +108,11 @@ impl Parameters {
             .map(|(i, _, _)| ParamId(self.ids[i]))
     }
 
-    pub fn get_by_id(&self, id: ParamId) -> Option<&Param> {
+    pub fn get_by_id(&self, id: ParamId) -> Option<(&String, &Param)> {
         self.ids
             .iter()
             .position(|other| *other == id.0)
             .and_then(|i| self.map.get_index(i))
-            .map(|(_, p)| p)
     }
 
     pub fn remove_by_name(&mut self, name: &str) -> Option<Param> {
@@ -153,6 +158,15 @@ impl Parameters {
     #[inline]
     pub fn len(&self) -> usize {
         self.map.len()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (ParamId, &String, &Param)> {
+        let ids_ptr = &self.ids as *const _;
+        self.map.iter().enumerate().map(move |(i, (name, param))| {
+            // TODO: Borrow won't let me use `self.ids` not sure why
+            let ids: &Vec<usize> = unsafe { &*ids_ptr };
+            (ParamId(ids[i]), name, param)
+        })
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (ParamId, &String, &mut Param)> {
@@ -639,14 +653,14 @@ fn update_transition(
                 .iter()
                 .all(|condition| match condition {
                     Condition::Bool { x, y } => {
-                        let x = parameters.get_by_id(*x).and_then(Param::as_bool);
+                        let x = parameters.get_by_id(*x).and_then(|(_, p)| p.as_bool());
                         let y = y.get(parameters);
                         x == y
                     }
                     Condition::Float { x, op, y } => {
                         let x = parameters
                             .get_by_id(*x)
-                            .and_then(Param::as_float)
+                            .and_then(|(_, p)| p.as_float())
                             .unwrap_or(0.0);
                         let y = y.get(parameters).unwrap_or(0.0);
                         match op {

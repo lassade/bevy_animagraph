@@ -7,12 +7,12 @@ use bevy::{
 };
 use bevy_animagraph::{
     petgraph::{visit::EdgeRef, EdgeDirection::Outgoing},
-    Animagraph, Layer, Param, State, Transition,
+    Animagraph, Layer, Param, ParamId, Parameters, State, Transition, Var,
 };
 use bevy_egui::{
     egui::{
         self, pos2, vec2, Color32, DragValue, Id, Key, Label, Layout, Pos2, Rect, Response, Sense,
-        Stroke, TextEdit, TextStyle, Ui, Vec2, WidgetInfo, WidgetType,
+        Stroke, TextEdit, TextStyle, Ui, Vec2, Widget, WidgetInfo, WidgetType,
     },
     EguiContext,
 };
@@ -188,14 +188,19 @@ fn animator_graph_editor_system(
 
                         ui.allocate_ui_at_rect(inspector_rect, |ui: &mut Ui| match selected {
                             Some(Selected::State(state)) => {
-                                if let Some(state) = target.mutate_without_modify().layers
-                                    [*selected_layer]
+                                let graph = target.mutate_without_modify();
+                                let layers = &mut graph.layers;
+                                let parameters = &graph.parameters;
+                                if let Some(state) = layers[*selected_layer]
                                     .graph
                                     .node_weight_mut((*state).into())
                                 {
                                     heading(ui, "State");
                                     field(ui, "Name", |ui| {
                                         ui.text_edit_singleline(&mut state.name);
+                                    });
+                                    field(ui, "Offset", |ui| {
+                                        var_widget(ui, parameters, &mut state.offset)
                                     });
 
                                     ui.add_space(10.0);
@@ -705,14 +710,110 @@ fn field<T>(ui: &mut Ui, label: impl Into<Label>, add_contents: impl FnOnce(&mut
     .inner
 }
 
-fn right_to_left<T>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> T) -> T {
-    ui.allocate_ui_with_layout(
-        vec2(ui.available_width(), 0.0),
-        Layout::right_to_left(),
-        add_contents,
-    )
+#[derive(Debug, Clone, Copy)]
+enum ParamType {
+    Bool,
+    Float,
+}
+
+#[inline]
+fn param_widget(
+    ui: &mut Ui,
+    params: &Parameters,
+    param_id: &mut ParamId,
+    param_type: ParamType,
+) -> Response {
+    ui.horizontal(|ui| {
+        let param = params.get_by_id(*param_id);
+        let name = match (param_type, param) {
+            (ParamType::Bool, Some((name, Param::Bool(_)))) => name.as_str(),
+            (ParamType::Float, Some((name, Param::Float(_)))) => name.as_str(),
+            _ => "",
+        };
+        egui::ComboBox::from_id_source("param_select")
+            .selected_text(name)
+            .show_ui(ui, |ui| {
+                for (other_id, other_name, param) in params.iter() {
+                    match (param_type, param) {
+                        (ParamType::Bool, Param::Bool(_)) | (ParamType::Float, Param::Float(_)) => {
+                            if ui
+                                .selectable_label(other_id == *param_id, other_name)
+                                .clicked()
+                            {
+                                *param_id = other_id;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            })
+    })
     .inner
 }
+
+trait TypeWidget {
+    fn widget(&mut self, ui: &mut Ui) -> Response;
+    fn param_type() -> ParamType;
+}
+
+impl TypeWidget for bool {
+    fn widget(&mut self, ui: &mut Ui) -> Response {
+        ui.checkbox(self, String::default())
+    }
+
+    #[inline]
+    fn param_type() -> ParamType {
+        ParamType::Bool
+    }
+}
+
+impl TypeWidget for f32 {
+    fn widget(&mut self, ui: &mut Ui) -> Response {
+        ui.add(DragValue::new(self).speed(0.01).max_decimals(3))
+    }
+
+    #[inline]
+    fn param_type() -> ParamType {
+        ParamType::Float
+    }
+}
+
+#[inline]
+fn var_widget<T: Default + TypeWidget>(
+    ui: &mut Ui,
+    params: &Parameters,
+    var: &mut Var<T>,
+) -> Response {
+    let text = "🗝";
+    ui.horizontal(|ui| match var {
+        Var::Value(value) => {
+            let mut is_param = false;
+            ui.checkbox(&mut is_param, text);
+            value.widget(ui);
+            if is_param {
+                *var = Var::Param(ParamId::default());
+            }
+        }
+        Var::Param(param_id) => {
+            let mut is_param = true;
+            ui.checkbox(&mut is_param, text);
+            param_widget(ui, params, param_id, T::param_type());
+            if !is_param {
+                *var = Var::Value(T::default());
+            }
+        }
+    })
+    .response
+}
+
+// fn right_to_left<T>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> T) -> T {
+//     ui.allocate_ui_with_layout(
+//         vec2(ui.available_width(), 0.0),
+//         Layout::right_to_left(),
+//         add_contents,
+//     )
+//     .inner
+// }
 
 #[inline]
 fn label_editable(ui: &mut Ui, id: impl Into<Id>, text: &String, temp_buffer: &mut String) -> bool {
