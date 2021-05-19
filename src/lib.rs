@@ -17,7 +17,6 @@ use bevy::{
     reflect::{Reflect, TypeUuid},
     utils::HashSet,
 };
-use indexmap::map::MutableKeys;
 use petgraph::{visit::EdgeRef, EdgeDirection::Outgoing, Graph};
 use rand::{thread_rng, Rng};
 use smallvec::{smallvec, SmallVec};
@@ -173,8 +172,13 @@ impl Parameters {
     // }
 
     pub fn rename_by_name(&mut self, name: &str, target: String) {
-        if let Some((_, name, _)) = self.map.get_full_mut2(name) {
-            *name = target;
+        if target.is_empty() {
+            return;
+        }
+        if let Some((a, _, param)) = self.map.swap_remove_full(name) {
+            let b = self.map.len();
+            self.map.insert(target, param);
+            self.map.swap_indices(a, b);
         }
     }
 

@@ -347,8 +347,10 @@ fn animator_graph_editor_system(
                                             &layer.name,
                                             temp_buffer,
                                         ) {
-                                            modify = true;
-                                            layer.name.clone_from(temp_buffer);
+                                            //modify = true;
+                                            if !temp_buffer.is_empty() {
+                                                layer.name.clone_from(temp_buffer);
+                                            }
                                         }
 
                                         ui.add_space((100.0 - x + ui.available_width()).max(0.0));
