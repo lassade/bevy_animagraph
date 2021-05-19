@@ -128,19 +128,13 @@ impl Param {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Copy, Clone)]
-pub struct ParamId(usize);
-
-impl Default for ParamId {
-    fn default() -> Self {
-        Self(usize::MAX)
-    }
-}
+#[derive(Default, Debug, Hash, PartialEq, Eq, Copy, Clone)]
+pub struct ParamId(Id);
 
 #[derive(Default, Debug, Clone)]
 pub struct Parameters {
     map: IndexMap<String, Param>,
-    ids: Vec<usize>,
+    ids: Ids,
 }
 
 impl Parameters {
@@ -152,19 +146,18 @@ impl Parameters {
     pub fn find_id(&self, name: &str) -> Option<ParamId> {
         self.map
             .get_full(name)
-            .map(|(i, _, _)| ParamId(self.ids[i]))
+            .map(|(i, _, _)| ParamId(self.ids.0[i]))
     }
 
-    pub fn get_by_id(&self, id: ParamId) -> Option<(&String, &Param)> {
+    pub fn get_by_id(&self, param_id: ParamId) -> Option<(&String, &Param)> {
         self.ids
-            .iter()
-            .position(|other| *other == id.0)
+            .find_index(param_id.0)
             .and_then(|i| self.map.get_index(i))
     }
 
     pub fn remove_by_name(&mut self, name: &str) -> Option<Param> {
-        if let Some((i, _, param)) = self.map.swap_remove_full(name) {
-            self.ids.swap_remove(i);
+        if let Some((index, _, param)) = self.map.swap_remove_full(name) {
+            self.ids.0.swap_remove_index(index);
             Some(param)
         } else {
             None
@@ -186,19 +179,11 @@ impl Parameters {
     }
 
     pub fn insert(&mut self, name: String, param: Param) -> ParamId {
-        let (i, _) = self.map.insert_full(name, param);
-        if i < self.ids.len() {
-            ParamId(self.ids[i])
+        let (index, _) = self.map.insert_full(name, param);
+        if let Some(id) = self.ids.0.get_index(index) {
+            ParamId(*id)
         } else {
-            // Create a new stable index
-            let mut rng = thread_rng();
-            loop {
-                let id: usize = rng.gen();
-                if !self.ids.iter().any(|other| *other == id) {
-                    self.ids.push(id);
-                    return ParamId(id);
-                }
-            }
+            ParamId(self.ids.insert())
         }
     }
 
@@ -211,8 +196,8 @@ impl Parameters {
         let ids_ptr = &self.ids as *const _;
         self.map.iter().enumerate().map(move |(i, (name, param))| {
             // TODO: Borrow won't let me use `self.ids` not sure why
-            let ids: &Vec<usize> = unsafe { &*ids_ptr };
-            (ParamId(ids[i]), name, param)
+            let ids: &Ids = unsafe { &*ids_ptr };
+            (ParamId(ids.0[i]), name, param)
         })
     }
 
@@ -223,31 +208,40 @@ impl Parameters {
             .enumerate()
             .map(move |(i, (name, param))| {
                 // TODO: Borrow won't let me use `self.ids` not sure why
-                let ids: &Vec<usize> = unsafe { &*ids_ptr };
-                (ParamId(ids[i]), name, param)
+                let ids: &Ids = unsafe { &*ids_ptr };
+                (ParamId(ids.0[i]), name, param)
             })
     }
 }
 
 ///////////////////////////////////////////////////////////////////////////////
 
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+struct Id(usize);
+
+impl Default for Id {
+    fn default() -> Self {
+        Self(0)
+    }
+}
+
 /// Stable indexes lookup table helper to reuse animator layers
 #[derive(Default, Debug, Clone)]
-struct Ids(IndexSet<usize>);
+struct Ids(IndexSet<Id>);
 
 impl Ids {
     #[inline]
-    pub fn find_index(&mut self, id: usize) -> Option<usize> {
+    fn find_index(&self, id: Id) -> Option<usize> {
         self.0.get_full(&id).map(|(i, _)| i)
     }
 
-    pub fn insert(&mut self) -> usize {
+    fn insert(&mut self) -> Id {
         // Create a new stable index
         let mut rng = thread_rng();
         loop {
-            let id: usize = rng.gen();
+            let id = Id(rng.gen::<usize>().max(1));
             if self.0.insert(id) {
-                return self.0.len() - 1;
+                return id;
             }
         }
     }
@@ -447,7 +441,7 @@ pub struct Transition {
 pub struct StateInfo {
     state: u32,
     duration: f32,
-    owned: SmallVec<[usize; 6]>,
+    owned: SmallVec<[Id; 6]>,
     pub loop_count: u32,
     pub normalized_time: f32,
 }
@@ -520,8 +514,8 @@ impl GraphInfo {
         }
     }
 
-    pub fn set_param_by_id<S>(&mut self, id: usize, param: Param) {
-        if let Some(index) = self.params.ids.iter().position(|other| *other == id) {
+    pub fn set_param_by_id<S>(&mut self, id: ParamId, param: Param) {
+        if let Some(index) = self.params.ids.find_index(id.0) {
             match self.params.map.get_index_mut(index) {
                 Some((_, Param::Float(v))) => *v = param.as_float().unwrap_or(0.0),
                 Some((_, Param::Bool(v))) => *v = param.as_bool().unwrap_or(false),
@@ -802,7 +796,7 @@ fn push_animator_layer<'a>(
     animator: &'a mut Animator,
     ids: &mut Ids,
     stack_index: &mut usize,
-    owned: &mut SmallVec<[usize; 6]>,
+    owned: &mut SmallVec<[Id; 6]>,
     owned_index: &mut usize,
 ) -> &'a mut bevy::animation::Layer {
     // Find where the layer is at
@@ -832,7 +826,7 @@ fn push_animator_layer<'a>(
 fn remove_animator_layer<'a>(
     animator: &'a mut Animator,
     ids: &mut Ids,
-    owned: &mut SmallVec<[usize; 6]>,
+    owned: &mut SmallVec<[Id; 6]>,
     owned_index: usize,
 ) {
     // Find where the layer is at
