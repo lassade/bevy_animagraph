@@ -11,8 +11,8 @@ use bevy_animagraph::{
 };
 use bevy_egui::{
     egui::{
-        self, pos2, vec2, Color32, DragValue, Id, Key, Label, Layout, Pos2, Rect, Response, Sense,
-        Stroke, TextEdit, TextStyle, Ui, Vec2, WidgetInfo, WidgetType,
+        self, pos2, vec2, Color32, DragValue, Frame, Id, Key, Label, Layout, Pos2, Rect, Response,
+        Sense, Stroke, TextEdit, TextStyle, Ui, Vec2, WidgetInfo, WidgetType,
     },
     EguiContext,
 };
@@ -359,38 +359,53 @@ fn animator_graph_editor_system(
                                             DragValue::new(&mut layer.default_weight)
                                                 .speed(0.01)
                                                 .max_decimals(3),
-                                        );
+                                        )
+                                        .on_hover_text("Layer Weight");
 
-                                        ui.checkbox(&mut layer.additive, String::default());
+                                        ui.checkbox(&mut layer.additive, String::default())
+                                            .on_hover_text("Additive Mode");
 
-                                        if layers_count > 1 {
+                                        Frame::none().show(ui, |ui| {
+                                            ui.set_enabled(layers_count > 1);
                                             if ui.selectable_label(false, "✖").clicked() {
                                                 layer_op = LayerOp::Remove(layer_index);
                                             }
-                                        }
+                                        });
 
-                                        if layer_index < (layers_count - 1) {
+                                        Frame::none().show(ui, |ui| {
+                                            ui.set_enabled(layer_index < (layers_count - 1));
                                             if ui.selectable_label(false, "⬇").clicked() {
                                                 layer_op = LayerOp::MoveDown(layer_index);
                                             }
-                                        }
+                                        });
 
-                                        if layer_index > 0 {
+                                        Frame::none().show(ui, |ui| {
+                                            ui.set_enabled(layer_index > 0);
                                             if ui.selectable_label(false, "⬆").clicked() {
                                                 layer_op = LayerOp::MoveUp(layer_index);
                                             }
-                                        }
+                                        });
                                     });
                                 }
                                 match layer_op {
                                     LayerOp::None => {}
                                     LayerOp::MoveUp(layer_index) => {
-                                        *selected_layer -= 1;
-                                        target.mutate().layers.swap(layer_index - 1, layer_index);
+                                        let target_index = layer_index - 1;
+                                        if *selected_layer == layer_index {
+                                            *selected_layer = target_index;
+                                        } else if *selected_layer == target_index {
+                                            *selected_layer = layer_index;
+                                        }
+                                        target.mutate().layers.swap(target_index, layer_index);
                                     }
                                     LayerOp::MoveDown(layer_index) => {
-                                        *selected_layer += 1;
-                                        target.mutate().layers.swap(layer_index, layer_index + 1);
+                                        let target_index = layer_index + 1;
+                                        if *selected_layer == layer_index {
+                                            *selected_layer = target_index;
+                                        } else if *selected_layer == target_index {
+                                            *selected_layer = layer_index;
+                                        }
+                                        target.mutate().layers.swap(layer_index, target_index);
                                     }
                                     LayerOp::Remove(layer_index) => {
                                         target.mutate().layers.remove(layer_index);
