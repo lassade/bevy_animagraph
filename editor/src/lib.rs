@@ -383,9 +383,11 @@ fn animator_graph_editor_system(
                                 match layer_op {
                                     LayerOp::None => {}
                                     LayerOp::MoveUp(layer_index) => {
+                                        *selected_layer -= 1;
                                         target.mutate().layers.swap(layer_index - 1, layer_index);
                                     }
                                     LayerOp::MoveDown(layer_index) => {
+                                        *selected_layer += 1;
                                         target.mutate().layers.swap(layer_index, layer_index + 1);
                                     }
                                     LayerOp::Remove(layer_index) => {
