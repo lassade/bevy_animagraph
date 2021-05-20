@@ -9,11 +9,12 @@ members = ["editor"]
 
 [dependencies]
 bevy = { git = "https://github.com/lassade/bevy", branch = "animations" }
-petgraph = "0.5.1"
-indexmap = "1.6.2"
+petgraph = { version =  "0.5.1", features = ["serde-1"] }
+indexmap = { version = "1.6.2", features = ["serde-1"] }
 ahash = "0.7.2"
 rand = "0.8.3"
 smallvec = "1.6.1"
+serde = { version = "1.0.126", features = ["derive"] }
 
 [patch."https://github.com/bevyengine/bevy"]
 bevy = { git = "https://github.com/lassade/bevy", branch = "animations" }

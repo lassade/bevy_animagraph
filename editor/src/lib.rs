@@ -1,13 +1,15 @@
-use std::{f32::EPSILON, string::ToString};
+use std::{f32::EPSILON, fs::File, io::Write, path::PathBuf, string::ToString};
 
+use anyhow::Result;
 use bevy::{
     asset::{Asset, HandleId},
     prelude::*,
     utils::HashMap,
 };
 use bevy_animagraph::{
+    asset_ref::AssetSerializer,
     petgraph::{visit::EdgeRef, EdgeDirection::Outgoing},
-    Animagraph, Layer, Param, ParamId, Parameters, State, Transition, Var, VarType,
+    AnimaGraph, Layer, Param, ParamId, Parameters, State, Transition, Var, VarType,
 };
 use bevy_egui::{
     egui::{
@@ -40,7 +42,7 @@ struct TransitionGroup {
 
 #[derive(Default)]
 struct Cache {
-    target: Option<Handle<Animagraph>>,
+    target: Option<Handle<AnimaGraph>>,
     target_layer: usize,
     grouped_transitions: HashMap<(u32, u32), TransitionGroup>,
 }
@@ -52,9 +54,9 @@ impl Cache {
     }
 }
 
-pub struct AnimagraphEditor {
+pub struct AnimaGraphEditor {
     pub open: bool,
-    pub editing: Option<Handle<Animagraph>>,
+    pub editing: Option<Handle<AnimaGraph>>,
     pub live: Option<Entity>,
     operation: EditOp,
     position: Vec2,
@@ -69,11 +71,12 @@ const STATE_SIZE: Vec2 = vec2(180.0, 40.0);
 const ARROW_SIZE: f32 = 8.0;
 
 fn animator_graph_editor_system(
-    mut graph_editor: ResMut<AnimagraphEditor>,
-    mut graphs: ResMut<Assets<Animagraph>>,
+    mut graph_editor: ResMut<AnimaGraphEditor>,
+    mut graphs: ResMut<Assets<AnimaGraph>>,
+    asset_server: Res<AssetServer>,
     egui_context: Res<EguiContext>,
 ) {
-    let AnimagraphEditor {
+    let AnimaGraphEditor {
         open,
         editing,
         live,
@@ -94,10 +97,10 @@ fn animator_graph_editor_system(
     }
 
     // Store graphs pointer for later
-    let graphs_ptr = &*graphs as *const _ as *mut Assets<Animagraph>;
+    let graphs_ptr = &*graphs as *const _ as *mut Assets<AnimaGraph>;
     let mut create_graph = false;
 
-    egui::Window::new("Animagraph Editor")
+    egui::Window::new("AnimaGraph Editor")
         .default_size([1100.0, 600.0])
         .open(open)
         .show(egui_context.ctx(), |ui| {
@@ -131,6 +134,31 @@ fn animator_graph_editor_system(
                         rect.min.y += TOOLBAR_HEIGHT;
                         ui.allocate_ui_at_rect(toolbar_rect, |ui: &mut Ui| {
                             ui.horizontal(|ui| {
+                                egui::ComboBox::from_id_source("graph_menu")
+                                    .selected_text("☰ Menu")
+                                    .show_ui(ui, |ui| {
+                                        if ui.selectable_label(false, "Save As").clicked() {
+                                            let save_path = native_dialog::FileDialog::new()
+                                                .set_filename(&format!(
+                                                    "{}.anima_graph",
+                                                    target.view().name
+                                                ))
+                                                .add_filter("AnimaGraph", &["anima_graph"])
+                                                .show_save_single_file();
+
+                                            if let Ok(Some(save_path)) = save_path {
+                                                // TODO: Log error
+                                                save_file(save_path, asset_server, target.view());
+                                            }
+                                        }
+                                        if ui.selectable_label(false, "Load").clicked() {
+                                            let load_path = native_dialog::FileDialog::new()
+                                                .add_filter("AnimaGraph", &["anima_graph"])
+                                                .show_open_single_file();
+                                            println!("{:?}", load_path);
+                                        }
+                                    });
+
                                 ui.label("Graph");
                                 egui::ComboBox::from_id_source("graph_select")
                                     .selected_text(&target.view().name)
@@ -720,11 +748,20 @@ fn animator_graph_editor_system(
     // Create a new graph and select it
     if create_graph {
         let name = format!("Graph{}", graphs.len());
-        *editing = Some(graphs.add(Animagraph {
+        *editing = Some(graphs.add(AnimaGraph {
             name,
             ..Default::default()
         }));
     }
+}
+
+fn save_file(save_path: PathBuf, asset_server: Res<AssetServer>, graph: &AnimaGraph) -> Result<()> {
+    let file = File::create(save_path)?;
+
+    let mut serializer = ron::Serializer::new(file, Some(ron::ser::PrettyConfig::default()), true)?;
+    // Oh for fuck sake, rust failed to provide a meaningful error here, remove the `&mut` and see ... avenge me future me report this error
+    asset_server.serialize_with_asset_refs(&mut serializer, graph)?;
+    Ok(())
 }
 
 #[inline]
@@ -1148,7 +1185,7 @@ pub struct AnimatorControllerEditorPlugin;
 
 impl Plugin for AnimatorControllerEditorPlugin {
     fn build(&self, app: &mut bevy::prelude::AppBuilder) {
-        app.insert_resource(AnimagraphEditor {
+        app.insert_resource(AnimaGraphEditor {
             open: true,
             editing: None,
             live: None,

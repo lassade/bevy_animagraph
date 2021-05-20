@@ -10,6 +10,9 @@ edition = "2018"
 bevy = { git = "https://github.com/lassade/bevy", branch = "animations" }
 bevy_egui = { git = "https://github.com/lassade/bevy_egui", branch = "main" }
 bevy_animagraph = { path = "../" }
+native-dialog = "0.5.5"
+ron = "0.6.4"
+anyhow = "1.0.40"
 
 [[example]]
 name = "main"

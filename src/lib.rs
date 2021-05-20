@@ -3,6 +3,7 @@ pub extern crate petgraph;
 
 use std::{f32::EPSILON, iter::Iterator};
 
+use asset_ref::AssetRef;
 use bevy::{
     animation::{AnimationStage, AnimationSystem, Animator, Clip},
     app::{EventReader, Plugin},
@@ -19,15 +20,19 @@ use bevy::{
 };
 use petgraph::{visit::EdgeRef, EdgeDirection::Outgoing, Graph};
 use rand::{thread_rng, Rng};
+use serde::{Deserialize, Serialize};
 use smallvec::{smallvec, SmallVec};
 
-pub type IndexMap<K, V> = indexmap::IndexMap<K, V, ahash::RandomState>;
+pub mod asset_ref;
+mod id;
+
+type IndexMap<K, V> = indexmap::IndexMap<K, V, ahash::RandomState>;
 
 type IndexSet<K> = indexmap::IndexSet<K, ahash::RandomState>;
 
 ///////////////////////////////////////////////////////////////////////////////
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum VarType {
     Bool,
     Float,
@@ -36,7 +41,7 @@ pub enum VarType {
 /// [`AnimatorGraph`] variable, that can be a parameter a fixed value
 ///
 /// **NOTE** It's important to preserve the values to improve the editor experience
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct Var<T: Default> {
     pub use_param: bool,
     pub value: T,
@@ -101,7 +106,7 @@ impl VarTrait<bool> for Var<bool> {
 ///////////////////////////////////////////////////////////////////////////////
 
 /// [`AnimatorGraph`] param, used to feed info to the graph
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum Param {
     Bool(bool),
     Float(f32),
@@ -127,10 +132,10 @@ impl Param {
     }
 }
 
-#[derive(Default, Debug, Hash, PartialEq, Eq, Copy, Clone)]
+#[derive(Default, Debug, Hash, PartialEq, Eq, Copy, Clone, Serialize, Deserialize)]
 pub struct ParamId(Id);
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct Parameters {
     map: IndexMap<String, Param>,
     ids: Ids,
@@ -220,7 +225,7 @@ impl Parameters {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize, Deserialize)]
 struct Id(usize);
 
 impl Default for Id {
@@ -230,7 +235,7 @@ impl Default for Id {
 }
 
 /// Stable indexes lookup table helper to reuse animator layers
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 struct Ids(IndexSet<Id>);
 
 impl Ids {
@@ -253,17 +258,17 @@ impl Ids {
 
 ///////////////////////////////////////////////////////////////////////////////
 
-#[derive(Debug, TypeUuid)]
+#[derive(Debug, TypeUuid, Serialize, Deserialize)]
 #[uuid = "6b7c940d-a698-40ae-9ff2-b08747d6e8e1"]
-pub struct Animagraph {
+pub struct AnimaGraph {
     pub name: String,
     pub parameters: Parameters,
     pub layers: Vec<Layer>,
 }
 
-impl Default for Animagraph {
+impl Default for AnimaGraph {
     fn default() -> Self {
-        Animagraph {
+        AnimaGraph {
             name: String::default(),
             parameters: Parameters::default(),
             layers: vec![Layer {
@@ -274,7 +279,7 @@ impl Default for Animagraph {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Layer {
     pub name: String,
     pub default_weight: f32,
@@ -336,7 +341,7 @@ impl Layer {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct State {
     pub name: String,
     /// State position, used for rendering the graph
@@ -360,12 +365,12 @@ impl Default for State {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StateData {
     /// Used for `Entry`, `Exit` or `Any`
     Marker,
     Clip {
-        clip: Handle<Clip>,
+        clip: AssetRef<Clip>,
     },
     // SubGraph {
     //     graph: Graph<State, Transition>,
@@ -382,30 +387,30 @@ pub enum StateData {
     },
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum Distance {
     Block,
     Cartesian,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entry<T> {
-    pub clip: Handle<Clip>,
+    pub clip: AssetRef<Clip>,
     pub position: T,
     pub time_scale: Var<f32>,
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct Blend1D {
     entries: Vec<Entry<f32>>,
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct Blend2D {
     entries: Vec<Entry<Vec2>>,
 }
 
-#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone, Serialize, Deserialize)]
 pub enum Compare {
     Equal,
     Less,
@@ -414,7 +419,7 @@ pub enum Compare {
     GreaterOrEqual,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Condition {
     Bool {
         x: ParamId,
@@ -433,7 +438,7 @@ pub enum Condition {
     },
 }
 
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct Transition {
     pub length: f32,
     pub conditions: Vec<Condition>,
@@ -531,16 +536,16 @@ impl GraphInfo {
 
 #[derive(Debug, Reflect)]
 #[reflect(Component)]
-pub struct AnimagraphPlayer {
-    graph: Handle<Animagraph>,
+pub struct AnimaGraphPlayer {
+    graph: Handle<AnimaGraph>,
     #[reflect(ignore)]
     runtime: Option<GraphInfo>,
     pub time_scale: f32,
 }
 
-impl Default for AnimagraphPlayer {
+impl Default for AnimaGraphPlayer {
     fn default() -> Self {
-        AnimagraphPlayer {
+        AnimaGraphPlayer {
             graph: Handle::default(),
             runtime: None,
             time_scale: 1.0,
@@ -548,13 +553,13 @@ impl Default for AnimagraphPlayer {
     }
 }
 
-impl AnimagraphPlayer {
-    pub fn set_graph(&mut self, graph: Handle<Animagraph>) {
+impl AnimaGraphPlayer {
+    pub fn set_graph(&mut self, graph: Handle<AnimaGraph>) {
         self.graph = graph;
         self.runtime = None;
     }
 
-    pub fn graph(&self) -> &Handle<Animagraph> {
+    pub fn graph(&self) -> &Handle<AnimaGraph> {
         &self.graph
     }
 
@@ -566,16 +571,16 @@ impl AnimagraphPlayer {
 pub(crate) fn animator_controller_system(
     time: Res<Time>,
     clips: Res<Assets<Clip>>,
-    graphs: Res<Assets<Animagraph>>,
+    graphs: Res<Assets<AnimaGraph>>,
     //mut clip_events: EventReader<AssetEvent<Clip>>,
-    mut graph_events: EventReader<AssetEvent<Animagraph>>,
-    mut controllers: Query<(&mut Animator, &mut AnimagraphPlayer)>,
+    mut graph_events: EventReader<AssetEvent<AnimaGraph>>,
+    mut controllers: Query<(&mut Animator, &mut AnimaGraphPlayer)>,
 ) {
     let clips = &*clips;
     let delta_time = time.delta_seconds();
 
     // Query all graphs that need to be invalidated
-    let mut invalidate: HashSet<Handle<Animagraph>> = HashSet::default();
+    let mut invalidate: HashSet<Handle<AnimaGraph>> = HashSet::default();
     for event in graph_events.iter() {
         match event {
             AssetEvent::Created { handle }
@@ -589,7 +594,7 @@ pub(crate) fn animator_controller_system(
     for (mut animator, mut controller) in controllers.iter_mut() {
         let animator: &mut Animator = &mut *animator;
 
-        let controller: &mut AnimagraphPlayer = &mut *controller;
+        let controller: &mut AnimaGraphPlayer = &mut *controller;
         let delta_time = delta_time * controller.time_scale;
 
         // Invalidate controller because it was changed,
@@ -857,7 +862,7 @@ fn update_state(
         StateData::Marker => {}
         StateData::Clip { clip } => {
             let clip_handle = clip;
-            if let Some(clip) = clips.get(clip) {
+            if let Some(clip) = clips.get(clip.as_ref()) {
                 let d = clip.duration();
 
                 let mut n = state_info.normalized_time;
@@ -875,7 +880,7 @@ fn update_state(
                 state_info.normalized_time = n;
 
                 // Add layer
-                let clip = animator.add_clip(clip_handle.clone()); // TODO: add_clip should take a ref to handle;
+                let clip = animator.add_clip(clip_handle.clone().into()); // TODO: add_clip should take a ref to handle;
                 let layer = push_animator_layer(
                     animator,
                     ids,
@@ -917,8 +922,8 @@ pub struct AnimatorControllerPlugin;
 
 impl Plugin for AnimatorControllerPlugin {
     fn build(&self, app: &mut bevy::prelude::AppBuilder) {
-        app.add_asset::<Animagraph>()
-            .register_type::<AnimagraphPlayer>()
+        app.add_asset::<AnimaGraph>()
+            .register_type::<AnimaGraphPlayer>()
             .add_system_to_stage(
                 AnimationStage::Animate,
                 animator_controller_system
