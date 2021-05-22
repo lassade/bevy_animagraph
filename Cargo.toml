@@ -15,6 +15,7 @@ ahash = "0.7.2"
 rand = "0.8.3"
 smallvec = "1.6.1"
 serde = { version = "1.0.126", features = ["derive"] }
+anyhow = "1.0.40"
 
 [patch."https://github.com/bevyengine/bevy"]
 bevy = { git = "https://github.com/lassade/bevy", branch = "animations" }

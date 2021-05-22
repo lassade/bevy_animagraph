@@ -112,9 +112,9 @@ impl AssetSerializer for AssetServer {
         T: Serialize,
     {
         ASSET_SERVER.with(|key| {
-            key.replace(NonNull::new(self as *const _ as *mut _));
+            let prev = key.replace(NonNull::new(self as *const _ as *mut _));
             let result = value.serialize(serializer);
-            key.replace(None);
+            key.replace(prev);
             result
         })
     }
@@ -125,9 +125,9 @@ impl AssetSerializer for AssetServer {
         T: Deserialize<'de>,
     {
         ASSET_SERVER.with(|key| {
-            key.replace(NonNull::new(self as *const _ as *mut _));
+            let prev = key.replace(NonNull::new(self as *const _ as *mut _));
             let result = T::deserialize(deserializer);
-            key.replace(None);
+            key.replace(prev);
             result
         })
     }

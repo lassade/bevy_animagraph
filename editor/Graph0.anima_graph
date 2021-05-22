@@ -1,0 +1,72 @@
+AnimaGraph(
+    name: "Graph0",
+    parameters: Parameters(
+        map: {
+            "Param0": Float(0),
+        },
+        ids: Ids([
+            Id(273776885537060030),
+        ]),
+    ),
+    layers: [
+        Layer(
+            name: "Layer0",
+            default_weight: 1,
+            additive: false,
+            graph: Graph(
+                nodes: [
+                    State(
+                        name: "Start",
+                        position: Vec2(374.70386, 194.26563),
+                        offset: Var(
+                            use_param: false,
+                            value: 0,
+                            param: ParamId(Id(0)),
+                        ),
+                        time_scale: Var(
+                            use_param: false,
+                            value: 1,
+                            param: ParamId(Id(0)),
+                        ),
+                        data: Marker,
+                    ),
+                    State(
+                        name: "Empty",
+                        position: Vec2(459.39407, 317.082),
+                        offset: Var(
+                            use_param: false,
+                            value: 0,
+                            param: ParamId(Id(0)),
+                        ),
+                        time_scale: Var(
+                            use_param: true,
+                            value: 1,
+                            param: ParamId(Id(273776885537060030)),
+                        ),
+                        data: Marker,
+                    ),
+                ],
+                node_holes: [],
+                edge_property: directed,
+                edges: [
+                    Some((0, 1, Transition(
+                        length: 0,
+                        conditions: [],
+                    ))),
+                    Some((0, 0, Transition(
+                        length: 0,
+                        conditions: [],
+                    ))),
+                    Some((1, 0, Transition(
+                        length: 0,
+                        conditions: [],
+                    ))),
+                    Some((0, 1, Transition(
+                        length: 0,
+                        conditions: [],
+                    ))),
+                ],
+            ),
+        ),
+    ],
+)

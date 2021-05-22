@@ -1,4 +1,4 @@
-use std::{f32::EPSILON, fs::File, io::Write, path::PathBuf, string::ToString};
+use std::{f32::EPSILON, fs::File, io::Read, path::Path, string::ToString};
 
 use anyhow::Result;
 use bevy::{
@@ -69,6 +69,7 @@ pub struct AnimaGraphEditor {
 
 const STATE_SIZE: Vec2 = vec2(180.0, 40.0);
 const ARROW_SIZE: f32 = 8.0;
+const EXTENSIONS: &'static [&'static str] = &["anima_graph"];
 
 fn animator_graph_editor_system(
     mut graph_editor: ResMut<AnimaGraphEditor>,
@@ -98,7 +99,13 @@ fn animator_graph_editor_system(
 
     // Store graphs pointer for later
     let graphs_ptr = &*graphs as *const _ as *mut Assets<AnimaGraph>;
-    let mut create_graph = false;
+
+    enum MenuOp {
+        None,
+        CreateNew,
+        Load,
+    }
+    let mut menu_op = MenuOp::None;
 
     egui::Window::new("AnimaGraph Editor")
         .default_size([1100.0, 600.0])
@@ -143,19 +150,21 @@ fn animator_graph_editor_system(
                                                     "{}.anima_graph",
                                                     target.view().name
                                                 ))
-                                                .add_filter("AnimaGraph", &["anima_graph"])
+                                                .add_filter("AnimaGraph", EXTENSIONS)
                                                 .show_save_single_file();
 
                                             if let Ok(Some(save_path)) = save_path {
-                                                // TODO: Log error
-                                                save_file(save_path, asset_server, target.view());
+                                                if let Err(err) = save_file(
+                                                    save_path.as_path(),
+                                                    &asset_server,
+                                                    target.view(),
+                                                ) {
+                                                    error!("`AssetGraph` couldn't be saved at '{}', reason: {}", save_path.display(), err);
+                                                }
                                             }
                                         }
                                         if ui.selectable_label(false, "Load").clicked() {
-                                            let load_path = native_dialog::FileDialog::new()
-                                                .add_filter("AnimaGraph", &["anima_graph"])
-                                                .show_open_single_file();
-                                            println!("{:?}", load_path);
+                                            menu_op = MenuOp::Load;
                                         }
                                     });
 
@@ -175,7 +184,7 @@ fn animator_graph_editor_system(
                                         }
                                         // ? NOTE: Graphs with no strong references will be disposed in the next few frames
                                         if ui.selectable_label(false, "*Create New").clicked() {
-                                            create_graph = true;
+                                            menu_op = MenuOp::CreateNew;
                                         }
                                     });
 
@@ -733,35 +742,80 @@ fn animator_graph_editor_system(
                 let offset = rect.size().y * 0.5 - 20.0;
                 rect.min.y += offset;
                 rect.max.y -= offset;
-                let response = action_needed(
-                    ui,
-                    rect,
-                    "No graph is currently been edited",
-                    "Create Graph",
-                );
-                if response.clicked() {
-                    create_graph = true;
-                }
+                ui.allocate_ui_at_rect(rect, |ui: &mut Ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.label("No graph is currently been edited");
+                        ui.add_space(5.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(ui.available_width() * 0.5 - 67.0);
+                            if ui.button("Create Graph").clicked() {
+                                menu_op = MenuOp::CreateNew;
+                            }
+                            if ui.button("Load").clicked() {
+                                menu_op = MenuOp::Load;
+                            }
+                        });
+                    });
+                });
             }
         });
 
-    // Create a new graph and select it
-    if create_graph {
-        let name = format!("Graph{}", graphs.len());
-        *editing = Some(graphs.add(AnimaGraph {
-            name,
-            ..Default::default()
-        }));
+    match menu_op {
+        MenuOp::None => {}
+        MenuOp::CreateNew => {
+            // Create a new graph and select it
+            let name = format!("Graph{}", graphs.len());
+            *editing = Some(graphs.add(AnimaGraph {
+                name,
+                ..Default::default()
+            }));
+        }
+        MenuOp::Load => {
+            let load_path = native_dialog::FileDialog::new()
+                .add_filter("AnimaGraph", EXTENSIONS)
+                .show_open_single_file();
+
+            if let Ok(Some(load_path)) = load_path {
+                // TOOD: Log error
+                match load_file(load_path.as_path(), &asset_server, &mut graphs) {
+                    Ok(loaded) => {
+                        *editing = Some(loaded);
+                    }
+                    Err(err) => {
+                        error!(
+                            "`AnimaGraph` at '{}' failed to load, reason: {}",
+                            load_path.display(),
+                            err
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 
-fn save_file(save_path: PathBuf, asset_server: Res<AssetServer>, graph: &AnimaGraph) -> Result<()> {
+fn save_file(save_path: &Path, asset_server: &AssetServer, graph: &AnimaGraph) -> Result<()> {
     let file = File::create(save_path)?;
 
     let mut serializer = ron::Serializer::new(file, Some(ron::ser::PrettyConfig::default()), true)?;
     // Oh for fuck sake, rust failed to provide a meaningful error here, remove the `&mut` and see ... avenge me future me report this error
     asset_server.serialize_with_asset_refs(&mut serializer, graph)?;
     Ok(())
+}
+
+fn load_file(
+    save_path: &Path,
+    asset_server: &AssetServer,
+    assets: &mut Assets<AnimaGraph>,
+) -> Result<Handle<AnimaGraph>> {
+    let mut file = File::open(save_path)?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+
+    let mut deserializer = ron::de::Deserializer::from_bytes(bytes.as_slice())?;
+    let graph = asset_server.deserialize_with_asset_refs(&mut deserializer)?;
+
+    Ok(assets.add(graph))
 }
 
 #[inline]
