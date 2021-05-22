@@ -8,7 +8,7 @@ edition = "2018"
 members = ["editor"]
 
 [dependencies]
-bevy = { git = "https://github.com/lassade/bevy", branch = "animations" }
+bevy = { git = "https://github.com/lassade/bevy", branch = "dev" }
 petgraph = { version =  "0.5.1", features = ["serde-1"] }
 indexmap = { version = "1.6.2", features = ["serde-1"] }
 ahash = "0.7.2"
@@ -18,4 +18,4 @@ serde = { version = "1.0.126", features = ["derive"] }
 anyhow = "1.0.40"
 
 [patch."https://github.com/bevyengine/bevy"]
-bevy = { git = "https://github.com/lassade/bevy", branch = "animations" }
+bevy = { git = "https://github.com/lassade/bevy", branch = "dev" }
