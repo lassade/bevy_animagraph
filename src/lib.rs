@@ -137,18 +137,22 @@ pub struct ParamId(Id);
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct Parameters {
-    map: IndexMap<String, Param>,
+    // TODO: Check if will make faster to access by Id
+    // params_by_id: IndexMap<Id, Param>,
+    // names: IndexSet<String>,
+    //
+    params_by_name: IndexMap<String, Param>,
     ids: Ids,
 }
 
 impl Parameters {
     #[inline]
     pub fn get_by_name(&self, name: &str) -> Option<Param> {
-        self.map.get(name).copied()
+        self.params_by_name.get(name).copied()
     }
 
     pub fn find_id(&self, name: &str) -> Option<ParamId> {
-        self.map
+        self.params_by_name
             .get_full(name)
             .map(|(i, _, _)| ParamId(self.ids.0[i]))
     }
@@ -156,11 +160,11 @@ impl Parameters {
     pub fn get_by_id(&self, param_id: ParamId) -> Option<(&String, &Param)> {
         self.ids
             .find_index(param_id.0)
-            .and_then(|i| self.map.get_index(i))
+            .and_then(|i| self.params_by_name.get_index(i))
     }
 
     pub fn remove_by_name(&mut self, name: &str) -> Option<Param> {
-        if let Some((index, _, param)) = self.map.swap_remove_full(name) {
+        if let Some((index, _, param)) = self.params_by_name.swap_remove_full(name) {
             self.ids.0.swap_remove_index(index);
             Some(param)
         } else {
@@ -180,15 +184,15 @@ impl Parameters {
         if target.is_empty() {
             return;
         }
-        if let Some((a, _, param)) = self.map.swap_remove_full(name) {
-            let b = self.map.len();
-            self.map.insert(target, param);
-            self.map.swap_indices(a, b);
+        if let Some((a, _, param)) = self.params_by_name.swap_remove_full(name) {
+            let b = self.params_by_name.len();
+            self.params_by_name.insert(target, param);
+            self.params_by_name.swap_indices(a, b);
         }
     }
 
     pub fn insert(&mut self, name: String, param: Param) -> ParamId {
-        let (index, _) = self.map.insert_full(name, param);
+        let (index, _) = self.params_by_name.insert_full(name, param);
         if let Some(id) = self.ids.0.get_index(index) {
             ParamId(*id)
         } else {
@@ -198,21 +202,24 @@ impl Parameters {
 
     #[inline]
     pub fn len(&self) -> usize {
-        self.map.len()
+        self.params_by_name.len()
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (ParamId, &String, &Param)> {
         let ids_ptr = &self.ids as *const _;
-        self.map.iter().enumerate().map(move |(i, (name, param))| {
-            // TODO: Borrow won't let me use `self.ids` not sure why
-            let ids: &Ids = unsafe { &*ids_ptr };
-            (ParamId(ids.0[i]), name, param)
-        })
+        self.params_by_name
+            .iter()
+            .enumerate()
+            .map(move |(i, (name, param))| {
+                // TODO: Borrow won't let me use `self.ids` not sure why
+                let ids: &Ids = unsafe { &*ids_ptr };
+                (ParamId(ids.0[i]), name, param)
+            })
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (ParamId, &String, &mut Param)> {
         let ids_ptr = &self.ids as *const _;
-        self.map
+        self.params_by_name
             .iter_mut()
             .enumerate()
             .map(move |(i, (name, param))| {
@@ -260,6 +267,7 @@ impl Ids {
 
 #[derive(Debug, TypeUuid, Serialize, Deserialize)]
 #[uuid = "6b7c940d-a698-40ae-9ff2-b08747d6e8e1"]
+#[serde(default)]
 pub struct AnimaGraph {
     pub name: String,
     pub parameters: Parameters,
@@ -280,6 +288,7 @@ impl Default for AnimaGraph {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Layer {
     pub name: String,
     pub default_weight: f32,
@@ -342,6 +351,7 @@ impl Layer {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct State {
     pub name: String,
     /// State position, used for rendering the graph
@@ -360,15 +370,13 @@ impl Default for State {
             position: Vec2::ZERO,
             offset: Var::from_value(0.0),
             time_scale: Var::from_value(1.0),
-            data: StateData::Marker,
+            data: StateData::default_clip(),
         }
     }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StateData {
-    /// Used for `Entry`, `Exit` or `Any`
-    Marker,
     Clip {
         clip: AssetRef<Clip>,
     },
@@ -385,6 +393,30 @@ pub enum StateData {
         y: Var<f32>,
         blend: Blend2D,
     },
+}
+
+impl StateData {
+    pub fn default_clip() -> Self {
+        StateData::Clip {
+            clip: AssetRef::default(),
+        }
+    }
+
+    pub fn default_blend1d() -> Self {
+        StateData::Blend1D {
+            value: Var::from_value(0.0),
+            blend: Blend1D::default(),
+        }
+    }
+
+    pub fn default_blend2d() -> Self {
+        StateData::Blend2D {
+            mode: Distance::Block,
+            x: Var::from_value(0.0),
+            y: Var::from_value(0.0),
+            blend: Blend2D::default(),
+        }
+    }
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
@@ -516,7 +548,7 @@ impl GraphInfo {
     }
 
     pub fn set_param_by_name<S>(&mut self, name: &str, param: Param) {
-        match self.params.map.get_mut(name) {
+        match self.params.params_by_name.get_mut(name) {
             Some(Param::Float(v)) => *v = param.as_float().unwrap_or(0.0),
             Some(Param::Bool(v)) => *v = param.as_bool().unwrap_or(false),
             _ => {}
@@ -525,7 +557,7 @@ impl GraphInfo {
 
     pub fn set_param_by_id<S>(&mut self, id: ParamId, param: Param) {
         if let Some(index) = self.params.ids.find_index(id.0) {
-            match self.params.map.get_index_mut(index) {
+            match self.params.params_by_name.get_index_mut(index) {
                 Some((_, Param::Float(v))) => *v = param.as_float().unwrap_or(0.0),
                 Some((_, Param::Bool(v))) => *v = param.as_bool().unwrap_or(false),
                 _ => {}
@@ -859,7 +891,6 @@ fn update_state(
     let time_scale = state.time_scale.get(parameters).unwrap_or(1.0);
     let mut owned_index = 0;
     match &state.data {
-        StateData::Marker => {}
         StateData::Clip { clip } => {
             let clip_handle = clip;
             if let Some(clip) = clips.get(clip.as_ref()) {

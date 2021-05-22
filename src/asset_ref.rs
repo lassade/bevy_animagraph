@@ -51,6 +51,7 @@ impl<T: Asset> Serialize for AssetRef<T> {
                 // be set by a valid [`AssetServer`] instance that will
                 // also make sure to set it to [`None`] once it's no longer is valid
                 let server = unsafe { ptr.as_ref() };
+                // ! TODO: `get_handle_path` does absolutely nothing
                 server.get_handle_path(&self.0).map(|asset_path| {
                     let mut path = asset_path.path().to_string_lossy().to_string();
                     if let Some(label) = asset_path.label() {
@@ -112,9 +113,9 @@ impl AssetSerializer for AssetServer {
         T: Serialize,
     {
         ASSET_SERVER.with(|key| {
-            let prev = key.replace(NonNull::new(self as *const _ as *mut _));
+            key.replace(NonNull::new(self as *const _ as *mut _));
             let result = value.serialize(serializer);
-            key.replace(prev);
+            key.replace(None);
             result
         })
     }
@@ -125,9 +126,9 @@ impl AssetSerializer for AssetServer {
         T: Deserialize<'de>,
     {
         ASSET_SERVER.with(|key| {
-            let prev = key.replace(NonNull::new(self as *const _ as *mut _));
+            key.replace(NonNull::new(self as *const _ as *mut _));
             let result = T::deserialize(deserializer);
-            key.replace(prev);
+            key.replace(None);
             result
         })
     }

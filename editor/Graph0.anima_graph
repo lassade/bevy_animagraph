@@ -1,7 +1,7 @@
 AnimaGraph(
     name: "Graph0",
     parameters: Parameters(
-        map: {
+        params_by_name: {
             "Param0": Float(0),
         },
         ids: Ids([
@@ -16,7 +16,7 @@ AnimaGraph(
             graph: Graph(
                 nodes: [
                     State(
-                        name: "Start",
+                        name: "Idle",
                         position: Vec2(374.70386, 194.26563),
                         offset: Var(
                             use_param: false,
@@ -28,10 +28,12 @@ AnimaGraph(
                             value: 1,
                             param: ParamId(Id(0)),
                         ),
-                        data: Marker,
+                        data: Clip(
+                            clip: Some("character_medium/idle.gltf#Anim0"),
+                        ),
                     ),
                     State(
-                        name: "Empty",
+                        name: "Run",
                         position: Vec2(459.39407, 317.082),
                         offset: Var(
                             use_param: false,
@@ -43,7 +45,9 @@ AnimaGraph(
                             value: 1,
                             param: ParamId(Id(273776885537060030)),
                         ),
-                        data: Marker,
+                        data: Clip(
+                            clip: Some("character_medium/run.gltf#Anim0"),
+                        ),
                     ),
                 ],
                 node_holes: [],
