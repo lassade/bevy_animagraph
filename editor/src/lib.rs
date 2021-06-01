@@ -1,8 +1,17 @@
 use std::{f32::EPSILON, fs::File, io::Read, path::Path, string::ToString};
 
 use anyhow::Result;
-use bevy::{animation::Clip, asset::{Asset, HandleId}, prelude::*, utils::HashMap};
-use bevy_animagraph::{AnimaGraph, Layer, Param, ParamId, Parameters, State, StateData, Transition, Var, VarType, asset_ref::{AssetRef, AssetSerializer}, petgraph::{visit::EdgeRef, EdgeDirection::Outgoing}};
+use bevy::{
+    animation::Clip,
+    asset::{Asset, HandleId},
+    prelude::*,
+    utils::HashMap,
+};
+use bevy_animagraph::{
+    asset_ref::{AssetRef, AssetSerializer},
+    petgraph::{visit::EdgeRef, EdgeDirection::Outgoing},
+    AnimaGraph, Layer, Param, ParamId, Parameters, State, StateData, Transition, Var, VarType,
+};
 use bevy_egui::{
     egui::{
         self, pos2, vec2, Color32, DragValue, Frame, Id, Key, Label, Layout, Pos2, Rect, Response,
@@ -10,6 +19,9 @@ use bevy_egui::{
     },
     EguiContext,
 };
+
+mod combo_box;
+mod popup;
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -254,10 +266,11 @@ fn animator_graph_editor_system(
                                     });
 
                                     const DATA_NAMES: &'static [&'static str] = &["Clip", "Blend 1D", "Blend 2D"];
+
                                     let data_index = match &state.data {
-                                        StateData::Clip { .. } => (0),
-                                        StateData::Blend1D { .. } => (1),
-                                        StateData::Blend2D { .. } => (2),
+                                        StateData::Clip { .. } => 0,
+                                        StateData::Blend1D { .. } => 1,
+                                        StateData::Blend2D { .. } => 2,
                                     };
 
                                     field(ui, "Data", |ui| {
@@ -271,15 +284,15 @@ fn animator_graph_editor_system(
                                                     }
                                                 }
 
-                                                let checked = data_index == 0;
-                                                if ui.selectable_label(checked, DATA_NAMES[0]).clicked() {
+                                                let checked = data_index == 1;
+                                                if ui.selectable_label(checked, DATA_NAMES[1]).clicked() {
                                                     if !checked {
                                                         state.data = StateData::default_blend1d();
                                                     }
                                                 }
-                                                
-                                                let checked = data_index == 0;
-                                                if ui.selectable_label(checked, DATA_NAMES[0]).clicked() {
+
+                                                let checked = data_index == 2;
+                                                if ui.selectable_label(checked, DATA_NAMES[2]).clicked() {
                                                     if !checked {
                                                         state.data = StateData::default_blend2d();
                                                     }
@@ -289,9 +302,9 @@ fn animator_graph_editor_system(
                                     let data_id = state_id.with(3);
                                     match &mut state.data {
                                         StateData::Clip { clip } => {
-                                        field(ui, "Clip", |ui| {
-                                            clip_ref_widget(ui, data_id.with(0), &clips, &mut filters.clips, clip);
-                                        });
+                                            field(ui, "Clip", |ui| {
+                                                clip_ref_widget(ui, data_id.with(0), &clips, &mut filters.clips, clip);
+                                            });
                                         }
                                         StateData::Blend1D { value, blend } => {}
                                         StateData::Blend2D { mode, x, y, blend } => {}
@@ -967,11 +980,11 @@ fn asset_ref_widget<T: Asset>(
     assets: &Assets<T>,
     filter: &mut String,
     asset_ref: &mut AssetRef<T>,
-    asset_name: impl Fn(&T) -> &str
+    asset_name: impl Fn(&T) -> &str,
 ) -> Response {
     ui.horizontal(|ui| {
         let handle: Handle<T> = asset_ref.clone().into();
-        egui::ComboBox::from_id_source(id.into())
+        combo_box::ComboBox::from_id_source(id.into())
             .selected_text(assets.get(&handle).map(&asset_name).unwrap_or(""))
             .show_ui(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -981,17 +994,18 @@ fn asset_ref_widget<T: Asset>(
                         filter.clear();
                     }
                 });
-        
+
                 ui.separator();
 
                 let filter = filter.as_str();
-                egui::ScrollArea::auto_sized().show(ui, |ui| {
+                const MAX_COMBO_HEIGHT: f32 = 128.0;
+                egui::ScrollArea::from_max_height(MAX_COMBO_HEIGHT).show(ui, |ui| {
                     for (handle_id, asset) in assets.iter() {
                         let name = asset_name(asset);
                         if filter.len() > 0 && !name.contains(filter) {
                             continue;
                         }
-                        
+
                         if ui.selectable_label(handle_id == handle.id, name).clicked() {
                             *asset_ref = assets.get_handle(handle_id).into();
                         }
@@ -1012,7 +1026,6 @@ fn clip_ref_widget(
 ) -> Response {
     asset_ref_widget(ui, id, assets, filter, asset_ref, |clip| clip.name.as_str())
 }
-
 
 // fn right_to_left<T>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> T) -> T {
 //     ui.allocate_ui_with_layout(
